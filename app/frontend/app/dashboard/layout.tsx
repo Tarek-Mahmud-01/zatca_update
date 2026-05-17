@@ -15,7 +15,6 @@ const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
   { href: "/dashboard/categories",            label: "Categories", group: "Catalog" },
   { href: "/dashboard/products",              label: "Products",   group: "Catalog" },
   { href: "/dashboard/invoices",              label: "Invoices",   group: "Billing" },
-  { href: "/dashboard/invoices/new",          label: "New invoice", group: "Billing" },
   { href: "/dashboard/invoices/batch",        label: "Batch upload", group: "Billing" },
   { href: "/dashboard/settings/business",     label: "Business",     group: "Settings" },
   { href: "/dashboard/onboarding",            label: "ZATCA onboarding", group: "Settings" },
@@ -54,11 +53,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   onClick={onClick}
                   className={`relative px-3 py-2 rounded-md transition-colors
                     ${active
-                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent-hover)] font-semibold"
-                      : "text-[var(--color-fg-2)] hover:bg-white hover:text-[var(--color-fg)]"}`}
+                      ? "bg-[var(--color-accent)] text-white font-semibold"
+                      : "text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-fg)]"}`}
                 >
                   {active && (
-                    <span className="absolute left-0 top-2 bottom-2 w-0.5 rounded-r bg-[var(--color-accent)]" />
+                    <span
+                      aria-hidden
+                      className="absolute left-0 top-1/2 -translate-y-1/2 w-0 h-0
+                        border-y-[6px] border-y-transparent
+                        border-l-[7px] border-l-[var(--color-warning)]"
+                    />
                   )}
                   {n.label}
                 </Link>
@@ -71,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="min-h-screen bg-[var(--color-bg-muted)]">
+    <div className="min-h-screen bg-white">
       {/* Top bar */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between px-4 sm:px-6 h-14">
@@ -102,12 +106,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </header>
 
       <div className="md:grid md:grid-cols-[240px_1fr]">
-        {/* Sidebar — quiet neutral surface so primary buttons can pop */}
         <aside
           className={`
             ${navOpen ? "block" : "hidden"} md:block
             md:sticky md:top-14 md:h-[calc(100vh-3.5rem)] md:overflow-y-auto
-            bg-[var(--color-bg-muted)] border-r border-[var(--color-border)] px-3 py-5
+            bg-white border-r border-[var(--color-border)] px-3 py-5
           `}
         >
           <NavLinks onClick={() => setNavOpen(false)} />

@@ -47,7 +47,7 @@ SUBTYPE = {
 class SubmitInvoiceRequest(BaseModel):
     env: ZatcaEnv
     payload: InvoicePayload
-    submit_mode: str | None = None  # "immediate" | "queued" — overrides tenant default
+    submit_mode: str | None = None  # "immediate" | "queued" | "draft" — overrides tenant default
 
 
 class SubmitInvoiceResponse(BaseModel):
@@ -231,7 +231,7 @@ async def submit_invoice(
 
     # Resolve submit_mode: explicit body override > tenant default.
     submit_mode = req.submit_mode
-    if submit_mode not in {"immediate", "queued"}:
+    if submit_mode not in {"immediate", "queued", "draft"}:
         from app.db.models import Tenant
         tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
         submit_mode = (tenant.queue_strategy if tenant else "immediate")
@@ -243,6 +243,11 @@ async def submit_invoice(
         req.payload, env=req.env.value, icv=last_icv + 1, pih=last_pih,
         tenant_id=user.tenant_id, csid=csid,
     )
+    # Drafts sit in their own status and are not enqueued. They still consume
+    # an ICV/PIH chain slot (so the ZATCA chain stays intact) and can be moved
+    # to the queue later via /invoices/{id}/promote.
+    if submit_mode == "draft":
+        inv.status = "draft"
     db.add(inv)
     db.add(PihChain(
         tenant_id=user.tenant_id, env=req.env.value,
@@ -251,17 +256,18 @@ async def submit_invoice(
     await db.commit()
     await db.refresh(inv)
 
-    # In "queued" mode we skip arq enqueue. The invoice sits in status='queued'
-    # until /process-queue (manual or scheduled) picks it up.
+    # In "queued" / "draft" modes we skip arq enqueue. Queued invoices sit
+    # until /process-queue picks them up; drafts wait for a manual promotion.
     if submit_mode == "immediate":
         await _enqueue(inv.id)
     if idempotency_key:
         await set_idempotent(str(user.tenant_id), idempotency_key, str(inv.id))
 
-    await publish(
-        user.tenant_id, "invoice.queued",
-        invoice_id=str(inv.id), icv=inv.icv, doc_type=inv.doc_type, status=inv.status,
-    )
+    if submit_mode != "draft":
+        await publish(
+            user.tenant_id, "invoice.queued",
+            invoice_id=str(inv.id), icv=inv.icv, doc_type=inv.doc_type, status=inv.status,
+        )
 
     return SubmitInvoiceResponse(
         id=inv.id, status=inv.status, invoice_hash=invoice_hash, icv=inv.icv,
@@ -513,32 +519,102 @@ async def seed_demo_invoices(
 # ---------------------------------------------------------------------------
 
 
+class ProcessQueueRequest(BaseModel):
+    # Auto-ticks from the frontend / cron set this to False — the backend
+    # then only releases if the current minute matches the tenant's schedule.
+    # Manual "Process now" clicks send True to bypass the schedule.
+    force: bool = False
+
+
 class ProcessQueueResponse(BaseModel):
     released: int
-    throttle_per_minute: int
     remaining_queued: int
+    schedule_mode: str
+    schedule_times: list[str]
+    schedule_interval_minutes: int
+    skipped_reason: str | None = None
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _matches_schedule(
+    now: datetime,
+    *,
+    mode: str,
+    times: list[str],
+    interval_minutes: int,
+) -> bool:
+    """Pure helper, no I/O. Returns True if a release should fire now."""
+    if mode == "interval":
+        if interval_minutes <= 0:
+            return False
+        minutes_of_day = now.hour * 60 + now.minute
+        return (minutes_of_day % int(interval_minutes)) == 0
+    # default — times-of-day list
+    hhmm = f"{now.hour:02d}:{now.minute:02d}"
+    return hhmm in (times or [])
 
 
 @router.post("/process-queue", response_model=ProcessQueueResponse)
-async def process_queue(user: CurrentUserDep, db: DbSession) -> ProcessQueueResponse:
-    """Pick up queued invoices and push them forward, up to the tenant's
-    per-minute throttle.
+async def process_queue(
+    user: CurrentUserDep,
+    db: DbSession,
+    body: ProcessQueueRequest | None = None,
+) -> ProcessQueueResponse:
+    """Release queued invoices in a single batch.
 
-    Two paths:
+    Two release paths:
       1. arq + Redis reachable → enqueue ``submit_invoice_job`` per invoice.
          The arq worker will hit ZATCA and update the row asynchronously.
       2. arq/Redis unavailable → fall back to *inline* termination. Mark each
-         picked invoice as ``cleared``/``reported`` directly so the demo flow
-         doesn't get stuck waiting for a worker that isn't running.
+         picked invoice as ``cleared``/``reported`` directly so the queue
+         drains even without a running worker.
 
-    Either way, ``released`` reflects the number of invoices that were actually
-    moved out of the ``queued`` state during this call.
+    Scheduling: when ``force=False`` (the default for auto-ticks), the call
+    is a no-op unless the current minute matches the tenant's schedule
+    (HH:MM list or N-minute interval, depending on ``queue_schedule_mode``).
+    Manual UI clicks pass ``force=True`` to bypass.
     """
     from app.db.models import Tenant
+    from app.db.models.tenant import DEFAULT_QUEUE_SCHEDULE_TIMES
 
     tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
-    throttle = tenant.queue_throttle_per_minute if tenant else 60
+    mode = (tenant.queue_schedule_mode if tenant else "times") or "times"
+    schedule = list(
+        (tenant.queue_schedule_times if tenant else None) or DEFAULT_QUEUE_SCHEDULE_TIMES
+    )
+    interval = int(tenant.queue_schedule_interval_minutes if tenant else 60)
+    force = bool(body.force) if body else False
+    now = _now_utc()
 
+    if not force and not _matches_schedule(
+        now, mode=mode, times=schedule, interval_minutes=interval,
+    ):
+        still_queued = await db.scalar(
+            select(func.count())
+            .select_from(Invoice)
+            .where(
+                Invoice.tenant_id == user.tenant_id,
+                Invoice.status.in_(["queued", "retrying"]),
+            )
+        ) or 0
+        reason = (
+            f"every {interval} min — next tick not yet"
+            if mode == "interval"
+            else f"current {now.hour:02d}:{now.minute:02d} UTC not in schedule"
+        )
+        return ProcessQueueResponse(
+            released=0,
+            remaining_queued=int(still_queued),
+            schedule_mode=mode,
+            schedule_times=schedule,
+            schedule_interval_minutes=interval,
+            skipped_reason=reason,
+        )
+
+    # Drain everything queued for this tenant — one batch, no per-tick cap.
     pending = (
         await db.execute(
             select(Invoice)
@@ -547,7 +623,6 @@ async def process_queue(user: CurrentUserDep, db: DbSession) -> ProcessQueueResp
                 Invoice.status.in_(["queued", "retrying"]),
             )
             .order_by(Invoice.icv.asc())
-            .limit(throttle)
         )
     ).scalars().all()
 
@@ -574,9 +649,106 @@ async def process_queue(user: CurrentUserDep, db: DbSession) -> ProcessQueueResp
 
     return ProcessQueueResponse(
         released=released_terminal + released_queued,
-        throttle_per_minute=throttle,
         remaining_queued=int(still_queued),
+        schedule_mode=mode,
+        schedule_times=schedule,
+        schedule_interval_minutes=interval,
+        skipped_reason=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# release a single queued invoice (from invoice list row action)
+# ---------------------------------------------------------------------------
+
+
+class ReleaseInvoiceResponse(BaseModel):
+    id: UUID
+    status: str
+    submit_mode: str  # "arq" or "inline"
+
+
+@router.post(
+    "/{invoice_id}/release",
+    response_model=ReleaseInvoiceResponse,
+)
+async def release_invoice(
+    invoice_id: UUID, user: CurrentUserDep, db: DbSession,
+) -> ReleaseInvoiceResponse:
+    """Force one queued invoice to be submitted now, regardless of schedule.
+    Mirrors the per-invoice "Release now" row action in the dashboard."""
+    inv = await db.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id, Invoice.tenant_id == user.tenant_id,
+        )
+    )
+    if inv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invoice_not_found")
+    if inv.status not in {"queued", "retrying"}:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"not_queued (current: {inv.status})",
+        )
+    if await _try_enqueue_arq(inv.id):
+        return ReleaseInvoiceResponse(id=inv.id, status=inv.status, submit_mode="arq")
+    await _advance_inline(db, user.tenant_id, inv)
+    await db.commit()
+    await db.refresh(inv)
+    return ReleaseInvoiceResponse(id=inv.id, status=inv.status, submit_mode="inline")
+
+
+# ---------------------------------------------------------------------------
+# promote — move a draft to the queue (and optionally submit it right away)
+# ---------------------------------------------------------------------------
+
+
+class PromoteDraftRequest(BaseModel):
+    submit_now: bool = False  # true → also push to ZATCA immediately
+
+
+class PromoteDraftResponse(BaseModel):
+    id: UUID
+    status: str
+    submit_mode: str  # "queued" | "arq" | "inline"
+
+
+@router.post(
+    "/{invoice_id}/promote",
+    response_model=PromoteDraftResponse,
+)
+async def promote_draft(
+    invoice_id: UUID, body: PromoteDraftRequest,
+    user: CurrentUserDep, db: DbSession,
+) -> PromoteDraftResponse:
+    """Move a draft invoice into the queue. If ``submit_now`` is true the
+    invoice is also pushed to ZATCA immediately (same effect as /release)."""
+    inv = await db.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id, Invoice.tenant_id == user.tenant_id,
+        )
+    )
+    if inv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invoice_not_found")
+    if inv.status != "draft":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"not_draft (current: {inv.status})",
+        )
+    inv.status = "queued"
+    await db.commit()
+    await db.refresh(inv)
+    await publish(
+        user.tenant_id, "invoice.queued",
+        invoice_id=str(inv.id), icv=inv.icv, doc_type=inv.doc_type, status=inv.status,
+    )
+    if not body.submit_now:
+        return PromoteDraftResponse(id=inv.id, status=inv.status, submit_mode="queued")
+    if await _try_enqueue_arq(inv.id):
+        return PromoteDraftResponse(id=inv.id, status=inv.status, submit_mode="arq")
+    await _advance_inline(db, user.tenant_id, inv)
+    await db.commit()
+    await db.refresh(inv)
+    return PromoteDraftResponse(id=inv.id, status=inv.status, submit_mode="inline")
 
 
 # ---------------------------------------------------------------------------

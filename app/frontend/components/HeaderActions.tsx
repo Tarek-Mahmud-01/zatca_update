@@ -111,7 +111,7 @@ export function HeaderActions() {
                 <button
                   type="button"
                   onClick={() => { clearAll(); setBellOpen(false); }}
-                  className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                  className="text-[11px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
                 >
                   Clear all
                 </button>
@@ -155,21 +155,21 @@ export function HeaderActions() {
 
         {menuOpen && (
           <div className="absolute right-0 mt-2 w-64 bg-white border border-[var(--color-border)] rounded-lg shadow-lg z-40 overflow-hidden">
-            <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-muted)]">
+            <div className="px-4 py-3 border-b border-[var(--color-border)]">
               <div className="text-sm font-semibold text-[var(--color-fg)] truncate">{me?.email ?? ""}</div>
               <div className="text-xs text-[var(--color-fg-muted)] truncate">{me?.tenant_name ?? ""}</div>
             </div>
-            <nav className="py-1 text-sm">
+            <nav className="p-1.5 flex flex-col gap-0.5 text-sm">
               <MenuLink href="/dashboard/settings/account">Account</MenuLink>
               <MenuLink href="/dashboard/settings/business">Business</MenuLink>
               <MenuLink href="/dashboard/settings/users">Team members</MenuLink>
               <MenuLink href="/dashboard/settings/api-target">API target</MenuLink>
               <MenuLink href="/dashboard/settings/preferences">Preferences</MenuLink>
             </nav>
-            <div className="border-t border-[var(--color-border)] py-1">
+            <div className="border-t border-[var(--color-border)] p-1.5">
               <button
                 onClick={signOut}
-                className="w-full text-left px-4 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+                className="w-full text-left px-3 py-1.5 rounded-md text-sm text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] focus-visible:bg-[var(--color-danger-soft)] focus-visible:outline-none"
               >
                 Sign out
               </button>
@@ -210,7 +210,7 @@ function MenuLink({ href, children }: { href: string; children: React.ReactNode 
   return (
     <Link
       href={href}
-      className="block px-4 py-2 text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-fg)]"
+      className="block px-3 py-1.5 rounded-md text-[var(--color-fg-2)] hover:bg-[var(--color-accent)] hover:text-white focus-visible:bg-[var(--color-accent)] focus-visible:text-white focus-visible:outline-none"
     >
       {children}
     </Link>

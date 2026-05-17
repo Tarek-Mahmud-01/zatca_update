@@ -128,11 +128,20 @@ async def submit_invoice_job(ctx: dict, invoice_id: str) -> str:
 
 
 async def submit_queue_tick(ctx: dict) -> dict:
-    """Runs every minute. For each tenant, picks queued invoices up to the
-    tenant's queue_throttle_per_minute cap and enqueues a submit_invoice_job
-    for each. Tenants whose strategy is "immediate" are skipped here — those
-    invoices were already enqueued at submit time."""
+    """Runs every minute. For each tenant whose strategy is "queued" and whose
+    schedule (HH:MM list or N-minute interval, depending on
+    ``queue_schedule_mode``) matches the current minute, releases *every*
+    queued invoice in one batch — no per-tick cap.
+
+    Tenants in "immediate" mode are skipped (those invoices were enqueued at
+    submit time). Tenants on "queued" but off-schedule are skipped this tick.
+    """
     from arq.connections import create_pool
+
+    from app.api.v1.invoices import _matches_schedule
+    from app.db.models.tenant import DEFAULT_QUEUE_SCHEDULE_TIMES
+
+    now = datetime.now(timezone.utc)
 
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     released_per_tenant: dict[str, int] = {}
@@ -140,7 +149,16 @@ async def submit_queue_tick(ctx: dict) -> dict:
         async with SessionLocal() as db:
             tenants = (await db.execute(select(Tenant))).scalars().all()
             for t in tenants:
-                throttle = max(1, int(t.queue_throttle_per_minute))
+                if t.queue_strategy != "queued":
+                    continue
+                schedule = list(t.queue_schedule_times or DEFAULT_QUEUE_SCHEDULE_TIMES)
+                if not _matches_schedule(
+                    now,
+                    mode=(t.queue_schedule_mode or "times"),
+                    times=schedule,
+                    interval_minutes=int(t.queue_schedule_interval_minutes or 60),
+                ):
+                    continue
                 pending = (
                     await db.execute(
                         select(Invoice)
@@ -149,7 +167,6 @@ async def submit_queue_tick(ctx: dict) -> dict:
                             Invoice.status.in_(["queued", "retrying"]),
                         )
                         .order_by(Invoice.icv.asc())
-                        .limit(throttle)
                     )
                 ).scalars().all()
                 for inv in pending:

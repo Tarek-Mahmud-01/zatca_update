@@ -22,6 +22,21 @@ interface LineForm {
 
 function round2(n: number): number { return Math.round(n * 100) / 100; }
 
+const CREDIT_REASON_PRESETS = [
+  "Cancellation of the supply (full or partial)",
+  "Essential change affecting VAT due",
+  "Amendment of pre-agreed supply value",
+  "Goods returned / services rejected",
+  "Change in buyer information",
+];
+
+const DEBIT_REASON_PRESETS = [
+  "Additional charge agreed after invoice",
+  "Price adjustment — under-stated amount",
+  "Extra goods / services delivered",
+  "Late-payment or freight surcharge",
+];
+
 function computeLine(l: LineForm) {
   const qty = Number(l.quantity || 0);
   const price = Number(l.unit_price || 0);
@@ -243,11 +258,23 @@ export default function AmendPage() {
 
         <div className="mt-4">
           <Field label="Reason" required hint="Required by ZATCA for auditability. Surfaced on the note as InstructionNote.">
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {(noteKind === "Debit Note" ? DEBIT_REASON_PRESETS : CREDIT_REASON_PRESETS).map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setReason(preset)}
+                  className={`chip hover:bg-[var(--color-bg-hover)] ${reason === preset ? "border-[var(--color-accent)] text-[var(--color-accent)]" : ""}`}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
             <textarea
               className="input min-h-[80px]"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. Customer returned 2 units / Damaged on delivery / Price negotiation revision"
+              placeholder="Pick a ZATCA preset above or write your own — e.g. Customer returned 2 units / Damaged on delivery"
               required minLength={3}
             />
           </Field>

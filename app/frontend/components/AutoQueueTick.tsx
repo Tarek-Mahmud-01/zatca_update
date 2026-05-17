@@ -10,9 +10,11 @@ const CONFIG_REFRESH_MS = 5 * 60_000;
 
 /**
  * Mounted once at the dashboard layout. When the tenant's queue strategy is
- * "queued", calls /process-queue every minute so invoices in the queue go out
- * without anyone clicking a button. Notifies only when something was actually
- * released (skips empty ticks to avoid spam).
+ * "queued", calls /process-queue every minute. The backend decides whether
+ * the current minute matches one of the tenant's scheduled HH:MM times and,
+ * if so, drains the whole queue in one batch. Off-schedule ticks are no-ops.
+ * We only notify when invoices were actually released, so off-schedule
+ * minutes are silent.
  */
 export function AutoQueueTick() {
   const [settings, setSettings] = useState<TenantSettings | null>(null);
@@ -39,12 +41,12 @@ export function AutoQueueTick() {
       }
       if (settings?.queue_strategy !== "queued") return;
       try {
-        const res = await api.processQueue(token);
+        const res = await api.processQueue(token, { force: false });
         if (res.released > 0) {
           pushNotification({
             tone: "success",
             title: `Auto-released ${res.released} from queue`,
-            body: `${res.remaining_queued} still waiting · throttle ${res.throttle_per_minute}/min`,
+            body: `${res.remaining_queued} still waiting`,
           });
         }
       } catch { /* swallow — Redis may be down */ }

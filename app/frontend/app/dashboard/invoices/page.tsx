@@ -16,9 +16,10 @@ import { pushNotification } from "../../../lib/notifications";
 import { Card, Empty, Field, PageHeader, StatusDot } from "../../../components/ui";
 import { DatePicker } from "../../../components/DatePicker";
 
-type StatusOption = "queued" | "retrying" | "cleared" | "reported" | "rejected" | "failed_pending_review";
+type StatusOption = "draft" | "queued" | "retrying" | "cleared" | "reported" | "rejected" | "failed_pending_review";
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: StatusOption; label: string }> = [
+  { value: "draft",                  label: "Draft"    },
   { value: "queued",                 label: "Queued"   },
   { value: "retrying",               label: "Retrying" },
   { value: "cleared",                label: "Cleared"  },
@@ -45,6 +46,7 @@ export default function InvoicesPage() {
   const [data, setData] = useState<InvoiceListPage | null>(null);
   const [pulse, setPulse] = useState<Set<string>>(new Set());
   const [seeding, setSeeding] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
@@ -107,18 +109,54 @@ export default function InvoicesPage() {
   async function processQueue() {
     const token = getToken();
     if (!token) return;
+    setProcessing(true);
     try {
-      const res = await api.processQueue(token);
+      // force=true — manual click ignores schedule and drains everything.
+      const res = await api.processQueue(token, { force: true });
       pushNotification({
         tone: res.released > 0 ? "success" : "info",
         title: res.released > 0 ? `Released ${res.released} from queue` : "Queue is empty",
         body: res.released > 0
-          ? `${res.remaining_queued} still waiting · throttle ${res.throttle_per_minute}/min`
+          ? `${res.remaining_queued} still waiting.`
           : "No queued invoices to release.",
       });
       reload();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Process queue failed", body: String(e) });
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function releaseOne(id: string) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const res = await api.releaseInvoice(token, id);
+      pushNotification({
+        tone: "success",
+        title: "Invoice released",
+        body: `Status: ${res.status}.`,
+      });
+      reload();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Release failed", body: String(e) });
+    }
+  }
+
+  async function promoteDraft(id: string, submit_now: boolean) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const res = await api.promoteDraft(token, id, { submit_now });
+      pushNotification({
+        tone: "success",
+        title: submit_now ? "Draft submitted" : "Draft moved to queue",
+        body: `Status: ${res.status}.`,
+      });
+      reload();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Promote failed", body: String(e) });
     }
   }
 
@@ -138,9 +176,9 @@ export default function InvoicesPage() {
         description={`${total.toLocaleString()} invoices${hasFilters ? " match the current filter" : " in this tenant"}.`}
         actions={
           <div className="flex gap-2 flex-wrap">
-            <button type="button" onClick={processQueue} className="btn btn-default"
-              title="Release pending 'queued' invoices to ZATCA up to the tenant's per-minute throttle.">
-              Process queue
+            <button type="button" onClick={processQueue} disabled={processing} className="btn btn-default"
+              title="Release every queued invoice to ZATCA right now, regardless of the daily schedule.">
+              {processing ? "Processing…" : "Process queue now"}
             </button>
             <button type="button" onClick={seedDemo} disabled={seeding} className="btn btn-default"
               title="Insert one invoice of every type. Locally signed, never submitted to ZATCA.">
@@ -235,7 +273,7 @@ export default function InvoicesPage() {
                     </td>
                     <td data-label="Total" className="md:text-right tabular-nums">{r.payable_amount ?? "—"}</td>
                     <td data-label="Actions" className="md:text-right">
-                      <RowActions item={r} />
+                      <RowActions item={r} onRelease={releaseOne} onPromote={promoteDraft} />
                     </td>
                   </tr>
                 ))}
@@ -260,7 +298,13 @@ function formatDDMMYYYY(iso: string): string {
 }
 
 /* Row actions: ⋮ menu instead of a strip of buttons */
-function RowActions({ item }: { item: InvoiceListItem }) {
+function RowActions({
+  item, onRelease, onPromote,
+}: {
+  item: InvoiceListItem;
+  onRelease: (id: string) => void;
+  onPromote: (id: string, submit_now: boolean) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -272,6 +316,8 @@ function RowActions({ item }: { item: InvoiceListItem }) {
   }, []);
 
   const canEdit = (item.status === "cleared" || item.status === "reported") && !item.doc_type.includes("_note");
+  const canRelease = item.status === "queued" || item.status === "retrying";
+  const isDraft = item.status === "draft";
 
   return (
     <div className="relative inline-block text-left" ref={ref}>
@@ -288,7 +334,7 @@ function RowActions({ item }: { item: InvoiceListItem }) {
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 z-30 w-44 bg-white border border-[var(--color-border)] rounded-md shadow-lg overflow-hidden">
+        <div className="absolute right-0 mt-1 z-30 w-48 bg-white border border-[var(--color-border)] rounded-md shadow-lg overflow-hidden">
           <Link
             href={`/dashboard/invoices/${item.id}`}
             onClick={() => setOpen(false)}
@@ -296,6 +342,33 @@ function RowActions({ item }: { item: InvoiceListItem }) {
           >
             Open
           </Link>
+          {isDraft && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onPromote(item.id, false); }}
+                className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+              >
+                Move to queue
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onPromote(item.id, true); }}
+                className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+              >
+                Submit now
+              </button>
+            </>
+          )}
+          {canRelease && (
+            <button
+              type="button"
+              onClick={() => { setOpen(false); onRelease(item.id); }}
+              className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+            >
+              Release now → submit
+            </button>
+          )}
           {canEdit && (
             <Link
               href={`/dashboard/invoices/${item.id}/amend`}
