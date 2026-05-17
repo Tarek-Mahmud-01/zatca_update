@@ -7,6 +7,7 @@ import { EnvBadge } from "../../components/EnvSwitcher";
 import { HeaderActions } from "../../components/HeaderActions";
 import { NotificationFeed } from "../../components/NotificationFeed";
 import { Toaster } from "../../components/Toaster";
+import { AutoQueueTick } from "../../components/AutoQueueTick";
 
 const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
   { href: "/dashboard",                       label: "Overview" },
@@ -118,8 +119,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </main>
       </div>
 
-      {/* Single SSE connection + bottom-right toast container */}
+      {/* Single SSE connection + bottom-right toast container + queue tick */}
       <NotificationFeed />
+      <AutoQueueTick />
       <Toaster />
     </div>
   );

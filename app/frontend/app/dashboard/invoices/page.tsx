@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
-  type AmendResult,
   type InvoiceEvent,
   type InvoiceListItem,
   type InvoiceListPage,
@@ -14,7 +13,8 @@ import { useActiveEnv } from "../../../lib/active-env";
 import { usePreferences } from "../../../lib/preferences";
 import { useInvoiceEvents } from "../../../lib/use-invoice-events";
 import { pushNotification } from "../../../lib/notifications";
-import { Banner, Card, Empty, Field, FieldGrid, PageHeader, StatusDot } from "../../../components/ui";
+import { Card, Empty, Field, PageHeader, StatusDot } from "../../../components/ui";
+import { DatePicker } from "../../../components/DatePicker";
 
 type StatusOption = "queued" | "retrying" | "cleared" | "reported" | "rejected" | "failed_pending_review";
 
@@ -32,16 +32,20 @@ export default function InvoicesPage() {
   const [prefs] = usePreferences();
   const pageSize = prefs.pageSize;
 
-  const [statuses, setStatuses] = useState<StatusOption[]>([]);
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  // Draft filter state — what the user is currently typing/ticking. The
+  // applied state below is what actually hits the API; commit only on Apply.
+  const [draftStatuses, setDraftStatuses] = useState<StatusOption[]>([]);
+  const [draftFrom, setDraftFrom]         = useState<string>("");
+  const [draftTo, setDraftTo]             = useState<string>("");
+  const [statuses, setStatuses]           = useState<StatusOption[]>([]);
+  const [dateFrom, setDateFrom]           = useState<string>("");
+  const [dateTo, setDateTo]               = useState<string>("");
+
   const [page, setPage] = useState(1);
   const [data, setData] = useState<InvoiceListPage | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [pulse, setPulse] = useState<Set<string>>(new Set());
   const [seeding, setSeeding] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [amendOf, setAmendOf] = useState<InvoiceListItem | null>(null);
 
   const reload = useCallback(async () => {
     const token = getToken();
@@ -54,13 +58,25 @@ export default function InvoicesPage() {
         date_to:   dateTo   || undefined,
       }));
     } catch (e) {
-      setError(String(e));
+      pushNotification({ tone: "danger", title: "Failed to load invoices", body: String(e) });
     } finally {
       setLoading(false);
     }
   }, [page, pageSize, statuses, dateFrom, dateTo]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  function applyFilters() {
+    setPage(1);
+    setStatuses(draftStatuses);
+    setDateFrom(draftFrom);
+    setDateTo(draftTo);
+  }
+  function resetFilters() {
+    setDraftStatuses([]); setDraftFrom(""); setDraftTo("");
+    setStatuses([]);      setDateFrom("");  setDateTo("");
+    setPage(1);
+  }
 
   useInvoiceEvents((event: InvoiceEvent) => {
     setPulse((s) => new Set(s).add(event.invoice_id));
@@ -72,7 +88,6 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     setSeeding(true);
-    setError(null);
     try {
       const res = await api.seedDemoInvoices(token, env, "1100");
       setPage(1);
@@ -83,7 +98,7 @@ export default function InvoicesPage() {
         body: `${res.created} invoices${res.used_dev_csid ? " (signed with a generated dev cert)" : ""}.`,
       });
     } catch (e) {
-      setError(String(e));
+      pushNotification({ tone: "danger", title: "Seed demo failed", body: String(e) });
     } finally {
       setSeeding(false);
     }
@@ -92,7 +107,6 @@ export default function InvoicesPage() {
   async function processQueue() {
     const token = getToken();
     if (!token) return;
-    setError(null);
     try {
       const res = await api.processQueue(token);
       pushNotification({
@@ -104,16 +118,12 @@ export default function InvoicesPage() {
       });
       reload();
     } catch (e) {
-      setError(String(e));
+      pushNotification({ tone: "danger", title: "Process queue failed", body: String(e) });
     }
   }
 
-  function changeStatusFilter(s: StatusOption, on: boolean) {
-    setPage(1);
-    setStatuses((prev) => on ? [...prev, s] : prev.filter((x) => x !== s));
-  }
-  function resetFilters() {
-    setStatuses([]); setDateFrom(""); setDateTo(""); setPage(1);
+  function changeDraftStatus(s: StatusOption, on: boolean) {
+    setDraftStatuses((prev) => on ? [...prev, s] : prev.filter((x) => x !== s));
   }
 
   const items: InvoiceListItem[] = data?.items ?? [];
@@ -142,25 +152,37 @@ export default function InvoicesPage() {
         }
       />
 
-      {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
-
       <Card className="mb-4">
-        <FieldGrid cols={3}>
-          <Field label="Status" hint="Tick any combination — leave empty for all.">
-            <StatusMultiSelect values={statuses} onChange={changeStatusFilter} />
-          </Field>
-          <Field label="Created from">
-            <input type="date" className="input" value={dateFrom}
-              onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
-          </Field>
-          <Field label="Created to">
-            <input type="date" className="input" value={dateTo}
-              onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
-          </Field>
-        </FieldGrid>
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="flex-1 min-w-[220px]">
+            <Field label="Status" hint="Tick any combination — leave empty for all.">
+              <StatusMultiSelect values={draftStatuses} onChange={changeDraftStatus} />
+            </Field>
+          </div>
+          <div className="flex-1 min-w-[160px]">
+            <Field label="Created from">
+              <DatePicker value={draftFrom} onChange={setDraftFrom} />
+            </Field>
+          </div>
+          <div className="flex-1 min-w-[160px]">
+            <Field label="Created to">
+              <DatePicker value={draftTo} onChange={setDraftTo} />
+            </Field>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-transparent select-none" aria-hidden>·</span>
+            <div className="flex gap-2">
+              <button className="btn btn-primary" onClick={applyFilters}>Apply filter</button>
+              <button className="btn btn-default" onClick={resetFilters}>Reset</button>
+            </div>
+          </div>
+        </div>
         {hasFilters && (
-          <div className="mt-3">
-            <button className="btn btn-ghost text-xs" onClick={resetFilters}>Reset filters</button>
+          <div className="mt-2 text-xs text-[var(--color-fg-muted)]">
+            {statuses.length > 0 && `${statuses.length} status${statuses.length === 1 ? "" : "es"}`}
+            {(statuses.length > 0 && (dateFrom || dateTo)) && " · "}
+            {(dateFrom || dateTo) && `${dateFrom || "…"} → ${dateTo || "…"}`}
+            {" applied"}
           </div>
         )}
       </Card>
@@ -204,7 +226,7 @@ export default function InvoicesPage() {
                     <td data-label="Invoice #">{r.invoice_number ?? `—`}</td>
                     <td data-label="Customer" className="text-[var(--color-fg-2)]">{r.customer_name ?? "—"}</td>
                     <td data-label="Type" className="text-[var(--color-fg-muted)]">{r.doc_type}</td>
-                    <td data-label="Issue date" className="text-[var(--color-fg-muted)]">{r.issue_date ?? "—"}</td>
+                    <td data-label="Issue date" className="text-[var(--color-fg-muted)]">{r.issue_date ? formatDDMMYYYY(r.issue_date) : "—"}</td>
                     <td data-label="Status">
                       <span className="inline-flex items-center gap-2">
                         <StatusDot status={r.status} />
@@ -213,19 +235,7 @@ export default function InvoicesPage() {
                     </td>
                     <td data-label="Total" className="md:text-right tabular-nums">{r.payable_amount ?? "—"}</td>
                     <td data-label="Actions" className="md:text-right">
-                      <div className="flex gap-2 md:justify-end">
-                        <Link href={`/dashboard/invoices/${r.id}`}
-                          className="btn btn-default !py-1 !px-2 text-xs">
-                          Open
-                        </Link>
-                        {(r.status === "cleared" || r.status === "reported") && !r.doc_type.includes("_note") && (
-                          <button onClick={() => setAmendOf(r)}
-                            className="btn btn-default !py-1 !px-2 text-xs"
-                            title="Issue a credit / debit note for the delta">
-                            Edit
-                          </button>
-                        )}
-                      </div>
+                      <RowActions item={r} />
                     </td>
                   </tr>
                 ))}
@@ -239,28 +249,69 @@ export default function InvoicesPage() {
           />
         </>
       )}
+    </div>
+  );
+}
 
-      {amendOf && (
-        <AmendModal
-          item={amendOf}
-          onClose={() => setAmendOf(null)}
-          onSubmitted={(res) => {
-            setAmendOf(null);
-            pushNotification({
-              tone: "success",
-              title: `${res.note_kind === "credit_note" ? "Credit note" : "Debit note"} issued`,
-              body: `ICV ${res.note_icv} · references ${res.references} · ${res.delta} SAR`,
-              href: `/dashboard/invoices/${res.note_invoice_id}`,
-            });
-            reload();
-          }}
-        />
+/* ISO yyyy-mm-dd → dd-mm-yyyy display */
+function formatDDMMYYYY(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : iso;
+}
+
+/* Row actions: ⋮ menu instead of a strip of buttons */
+function RowActions({ item }: { item: InvoiceListItem }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const canEdit = (item.status === "cleared" || item.status === "reported") && !item.doc_type.includes("_note");
+
+  return (
+    <div className="relative inline-block text-left" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Row actions"
+        className="inline-flex items-center justify-center w-8 h-8 rounded-md text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)] border border-transparent hover:border-[var(--color-border)]"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="12" cy="5"  r="1.6" />
+          <circle cx="12" cy="12" r="1.6" />
+          <circle cx="12" cy="19" r="1.6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 z-30 w-44 bg-white border border-[var(--color-border)] rounded-md shadow-lg overflow-hidden">
+          <Link
+            href={`/dashboard/invoices/${item.id}`}
+            onClick={() => setOpen(false)}
+            className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+          >
+            Open
+          </Link>
+          {canEdit && (
+            <Link
+              href={`/dashboard/invoices/${item.id}/amend`}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+            >
+              Edit (issue CN/DN)
+            </Link>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-/* Multi-select dropdown for status */
+/* Multi-select with chips inside the trigger */
 function StatusMultiSelect({
   values, onChange,
 }: {
@@ -277,28 +328,37 @@ function StatusMultiSelect({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const label = values.length === 0 ? "All statuses" : `${values.length} selected`;
-
   return (
     <div className="relative" ref={ref}>
-      <button type="button" onClick={() => setOpen((v) => !v)}
-        className="input text-left flex items-center justify-between w-full">
-        <span className={values.length === 0 ? "text-[var(--color-fg-faint)]" : ""}>{label}</span>
-        <span className="text-[var(--color-fg-muted)]">▾</span>
-      </button>
-      {values.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
-          {values.map((v) => {
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="input text-left flex items-center gap-1.5 flex-wrap min-h-[38px] w-full"
+      >
+        {values.length === 0 ? (
+          <span className="text-[var(--color-fg-faint)]">All statuses</span>
+        ) : (
+          values.map((v) => {
             const lbl = STATUS_OPTIONS.find((o) => o.value === v)?.label ?? v;
             return (
-              <span key={v} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-[var(--color-bg-soft)] text-[var(--color-fg-2)] border border-[var(--color-border)]">
-                {lbl}
-                <button type="button" onClick={() => onChange(v, false)} className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]">×</button>
+              <span key={v} className="chip">
+                <StatusDot status={v} />
+                <span className="ml-1">{lbl}</span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); onChange(v, false); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onChange(v, false); } }}
+                  className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] cursor-pointer pl-1"
+                >
+                  ×
+                </span>
               </span>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+        <span className="ml-auto text-[var(--color-fg-muted)]">▾</span>
+      </button>
       {open && (
         <div className="absolute mt-1 z-30 bg-white border border-[var(--color-border)] rounded-md shadow-lg w-full overflow-hidden">
           {STATUS_OPTIONS.map((o) => {
@@ -316,85 +376,6 @@ function StatusMultiSelect({
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-/* Amend modal — lifted so it works inline on the list */
-function AmendModal({
-  item, onClose, onSubmitted,
-}: {
-  item: InvoiceListItem;
-  onClose: () => void;
-  onSubmitted: (r: AmendResult) => void;
-}) {
-  const previous = item.payable_amount ?? "0";
-  const [newPayable, setNewPayable] = useState(previous);
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const prev = Number(previous);
-  const next = Number(newPayable || 0);
-  const delta = next - prev;
-  const noteKind = delta < 0 ? "Credit Note" : delta > 0 ? "Debit Note" : null;
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (delta === 0) { setError("Enter a new payable amount that differs from the previous one."); return; }
-    if (reason.trim().length < 3) { setError("Min 3-character reason required."); return; }
-    const token = getToken();
-    if (!token) return;
-    setBusy(true); setError(null);
-    try {
-      const res = await api.amendInvoice(token, item.id, { new_payable: newPayable, reason });
-      onSubmitted(res);
-    } catch (e) { setError(String(e)); } finally { setBusy(false); }
-  }
-
-  return (
-    <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white border border-[var(--color-border)] rounded-lg shadow-lg w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-[var(--color-border)]">
-          <div className="text-sm font-semibold text-[var(--color-fg)]">
-            Edit invoice {item.invoice_number ?? `ICV ${item.icv}`}
-          </div>
-          <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">
-            Auto-generates a Credit Note (reduction) or Debit Note (increase) referencing this invoice.
-          </div>
-        </div>
-        <form onSubmit={submit} className="p-5 flex flex-col gap-4">
-          <FieldGrid cols={2}>
-            <Field label="Previous payable (SAR)">
-              <input className="input tabular-nums" value={previous} readOnly />
-            </Field>
-            <Field label="New payable (SAR)" required>
-              <input className="input tabular-nums" inputMode="decimal" value={newPayable}
-                onChange={(e) => setNewPayable(e.target.value)} />
-            </Field>
-          </FieldGrid>
-          <div className={`text-sm rounded-md px-3 py-2 border ${
-            noteKind === "Credit Note" ? "bg-[var(--color-success-soft)] text-[var(--color-success)] border-[var(--color-success)]/30"
-            : noteKind === "Debit Note" ? "bg-[var(--color-warning-soft)] text-[var(--color-warning)] border-[var(--color-warning)]/30"
-            : "bg-[var(--color-bg-soft)] text-[var(--color-fg-muted)] border-[var(--color-border)]"}`}>
-            {noteKind === null
-              ? "Enter a different amount to preview the note."
-              : <>Will create a <strong>{noteKind}</strong> for <span className="tabular-nums">{Math.abs(delta).toFixed(2)} SAR</span> (delta from {prev.toFixed(2)} → {next.toFixed(2)}).</>}
-          </div>
-          <Field label="Reason" required hint="Surfaced on the note as InstructionNote.">
-            <textarea className="input min-h-[80px]" value={reason}
-              onChange={(e) => setReason(e.target.value)} required minLength={3}
-              placeholder="e.g. Customer returned 1 unit" />
-          </Field>
-          {error && <Banner tone="danger">{error}</Banner>}
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn btn-default" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={busy || delta === 0}>
-              {busy ? "Generating…" : noteKind === "Credit Note" ? "Issue credit note" : "Issue debit note"}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }

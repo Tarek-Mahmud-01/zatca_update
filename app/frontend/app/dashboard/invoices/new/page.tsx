@@ -76,6 +76,9 @@ export default function NewInvoicePage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [lines, setLines] = useState<LineForm[]>([newLine(1)]);
+  // Reference-invoice picker (only for credit/debit notes).
+  const [refSearch, setRefSearch] = useState("");
+  const [refResults, setRefResults] = useState<Array<{ id: string; invoice_number: string | null; icv: number; doc_type: string; customer_name: string | null; payable_amount: string | null }>>([]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +92,78 @@ export default function NewInvoicePage() {
       setProducts(ps);
     }).catch((e) => setError(String(e)));
   }, []);
+
+  // ------ load recent invoices for the reference picker (CN/DN only) ------
+  const isNote = docType.endsWith("credit_note") || docType.endsWith("debit_note");
+  useEffect(() => {
+    const token = getToken();
+    if (!token || !isNote) return;
+    const handle = setTimeout(async () => {
+      try {
+        const page = await api.listInvoices(token, {
+          page: 1, page_size: 25,
+          statuses: ["cleared", "reported"],
+        });
+        const lower = refSearch.toLowerCase();
+        const filtered = !lower
+          ? page.items
+          : page.items.filter((i) =>
+              (i.invoice_number || "").toLowerCase().includes(lower) ||
+              (i.customer_name  || "").toLowerCase().includes(lower) ||
+              String(i.icv).includes(lower),
+            );
+        setRefResults(filtered.slice(0, 10));
+      } catch { /* ignore */ }
+    }, 200);
+    return () => clearTimeout(handle);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refSearch, isNote]);
+
+  async function pickReferenceInvoice(id: string) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const inv = await api.getInvoice(token, id);
+      const p = inv.payload_json as unknown as {
+        invoice_number?: string;
+        supplier?: unknown;
+        customer?: { registration_name?: string; vat_number?: string | null };
+        lines?: Array<{
+          id?: string; name?: string;
+          quantity?: string; unit_code?: string; unit_price?: string;
+          tax_category?: LineForm["vat_code"]; tax_percent?: string;
+          discount_amount?: string;
+        }>;
+      };
+      // Fill the billing reference + copy customer + lines from the original.
+      setBillingRefId(p.invoice_number || String(inv.icv));
+      if (p.customer?.vat_number) {
+        const match = customers.find((c) => c.vat_number === p.customer?.vat_number);
+        if (match) setCustomerId(match.id);
+      }
+      if (p.lines && p.lines.length > 0) {
+        setLines(p.lines.map((l, i) => ({
+          id: String(l.id ?? i + 1),
+          product_id: "", sku: "", name: l.name ?? "",
+          quantity: l.quantity ?? "1",
+          unit_code: l.unit_code ?? "PCE",
+          unit_price: l.unit_price ?? "0.00",
+          vat_code: l.tax_category ?? "S",
+          vat_percent: l.tax_percent ?? "15",
+          discount_amount: l.discount_amount ?? "0",
+        })));
+      }
+      setRefSearch("");
+      setRefResults([]);
+      pushNotification({
+        tone: "info",
+        title: `Loaded reference invoice ${p.invoice_number ?? `ICV ${inv.icv}`}`,
+        body: "Lines and customer copied. Edit as needed before submitting.",
+      });
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Couldn't load reference invoice", body: String(e) });
+    }
+  }
 
   // ------ derived ------
   const needsBillingRef = docType.endsWith("credit_note") || docType.endsWith("debit_note");
@@ -274,15 +349,65 @@ export default function NewInvoicePage() {
             </FieldGrid>
 
             {needsBillingRef && (
-              <div className="mt-4">
-                <FieldGrid cols={2}>
-                  <Field label="References invoice #" required>
-                    <input className="input" value={billingRefId} onChange={(e) => setBillingRefId(e.target.value)} />
-                  </Field>
-                  <Field label="Instruction note">
-                    <input className="input" value={instructionNote} onChange={(e) => setInstructionNote(e.target.value)} />
-                  </Field>
-                </FieldGrid>
+              <div className="mt-4 flex flex-col gap-4">
+                <Field
+                  label="Reference invoice"
+                  required
+                  hint="Pick a cleared/reported invoice to auto-fill customer + line items, or type the invoice number manually."
+                >
+                  <div className="relative">
+                    <input
+                      className="input"
+                      placeholder="Search by invoice #, customer or ICV…"
+                      value={refSearch || billingRefId}
+                      onChange={(e) => { setRefSearch(e.target.value); setBillingRefId(e.target.value); }}
+                    />
+                    {refSearch && refResults.length > 0 && (
+                      <div className="absolute z-30 mt-1 w-full bg-white border border-[var(--color-border)] rounded-md shadow-lg max-h-64 overflow-y-auto">
+                        {refResults.map((r) => (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => pickReferenceInvoice(r.id)}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--color-bg-hover)] border-b last:border-b-0 border-[var(--color-border-soft)]"
+                          >
+                            <div className="font-medium text-[var(--color-fg)]">
+                              {r.invoice_number ?? `ICV ${r.icv}`}
+                              <span className="ml-2 text-xs text-[var(--color-fg-muted)]">{r.doc_type}</span>
+                            </div>
+                            <div className="text-xs text-[var(--color-fg-muted)] flex justify-between">
+                              <span>{r.customer_name ?? "—"}</span>
+                              <span className="tabular-nums">{r.payable_amount ?? "—"} SAR</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </Field>
+
+                <Field
+                  label="Reason / instruction note"
+                  hint="Pick a common reason or type your own. Surfaced on the note as InstructionNote."
+                >
+                  <input
+                    className="input"
+                    list="cn-dn-reasons"
+                    value={instructionNote}
+                    onChange={(e) => setInstructionNote(e.target.value)}
+                    placeholder="e.g. Customer returned 2 units"
+                  />
+                  <datalist id="cn-dn-reasons">
+                    <option value="Customer returned items" />
+                    <option value="Goods damaged in transit" />
+                    <option value="Price renegotiation" />
+                    <option value="Quantity correction" />
+                    <option value="Discount applied late" />
+                    <option value="Wrong amount billed" />
+                    <option value="Late-payment fee" />
+                    <option value="Additional service rendered" />
+                  </datalist>
+                </Field>
               </div>
             )}
           </Card>

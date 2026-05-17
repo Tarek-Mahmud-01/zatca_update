@@ -93,7 +93,7 @@ export function HeaderActions() {
         >
           <BellIcon />
           {unread > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-[var(--color-danger)] text-white text-[10px] font-semibold flex items-center justify-center tabular-nums">
+            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-[var(--color-accent)] text-white text-[10px] font-semibold flex items-center justify-center tabular-nums">
               {unread > 99 ? "99+" : unread}
             </span>
           )}
