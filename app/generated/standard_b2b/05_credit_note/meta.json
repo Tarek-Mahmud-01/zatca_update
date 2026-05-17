@@ -1,0 +1,13 @@
+{
+  "doc_type": "standard_credit_note",
+  "invoice_number": "DEMO-STD-005",
+  "uuid": "23383fbe-37a4-404d-b79a-afa1575be5a7",
+  "icv": 5,
+  "pih_b64": "IYq03q8oEoTzdcJP7ZW77ervAvdvDjLzyhv3bFD+6h8=",
+  "invoice_hash_b64": "o+HpwRrJsudQ9N+ojoglJknB9cPc/OU1C8lRIADFIu4=",
+  "signed_at": "2026-05-17T04:16:06.479547+00:00",
+  "byte_lengths": {
+    "signed_xml": 9124,
+    "qr_base64": 488
+  }
+}

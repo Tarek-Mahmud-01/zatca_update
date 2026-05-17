@@ -1,0 +1,13 @@
+{
+  "doc_type": "self_billing_invoice",
+  "invoice_number": "DEMO-SELFBILL-001",
+  "uuid": "28a0eb89-d598-4335-880e-16af407ea56d",
+  "icv": 3,
+  "pih_b64": "ra5ubiyJgsPttZENTx2C53IR4s2sXoZ8zxYnj7/xROk=",
+  "invoice_hash_b64": "Skuut+bxoNiLE6/AvuHnVQw7vHEWj0XzOWdey4oVQVg=",
+  "signed_at": "2026-05-17T04:16:06.946854+00:00",
+  "byte_lengths": {
+    "signed_xml": 8869,
+    "qr_base64": 492
+  }
+}

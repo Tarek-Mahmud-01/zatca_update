@@ -1,0 +1,257 @@
+[
+  {
+    "family": "standard_b2b",
+    "scenario": "basic",
+    "doc_type": "standard_invoice",
+    "invoice_number": "DEMO-STD-001",
+    "uuid": "8152806a-0951-4495-a6a4-21e497566443",
+    "icv": 1,
+    "pih_b64": "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==",
+    "invoice_hash_b64": "FblgVLA7biMXyVIqVyVmlcm8xOxSbLRwNGwLjtfGCsM=",
+    "signed_at": "2026-05-17T04:16:06.295448+00:00",
+    "byte_lengths": {
+      "signed_xml": 8950,
+      "qr_base64": 492
+    }
+  },
+  {
+    "family": "standard_b2b",
+    "scenario": "line_discount",
+    "doc_type": "standard_invoice",
+    "invoice_number": "DEMO-STD-002",
+    "uuid": "bf668a5a-32b6-4152-b43b-c4c31050061f",
+    "icv": 2,
+    "pih_b64": "FblgVLA7biMXyVIqVyVmlcm8xOxSbLRwNGwLjtfGCsM=",
+    "invoice_hash_b64": "JiALypS9uhuXu182WizbjYQoGa7cUc9mTTWVZ0O8IiA=",
+    "signed_at": "2026-05-17T04:16:06.338686+00:00",
+    "byte_lengths": {
+      "signed_xml": 9764,
+      "qr_base64": 496
+    }
+  },
+  {
+    "family": "standard_b2b",
+    "scenario": "doc_discount",
+    "doc_type": "standard_invoice",
+    "invoice_number": "DEMO-STD-003",
+    "uuid": "7bee0b0d-0776-46cb-8220-263e52675a0c",
+    "icv": 3,
+    "pih_b64": "JiALypS9uhuXu182WizbjYQoGa7cUc9mTTWVZ0O8IiA=",
+    "invoice_hash_b64": "qA3HkRQUbQXwAlKYM6s6IyX7WjI+yMCt5t2smzpszDU=",
+    "signed_at": "2026-05-17T04:16:06.384339+00:00",
+    "byte_lengths": {
+      "signed_xml": 9433,
+      "qr_base64": 496
+    }
+  },
+  {
+    "family": "standard_b2b",
+    "scenario": "mixed_vat",
+    "doc_type": "standard_invoice",
+    "invoice_number": "DEMO-STD-004",
+    "uuid": "1a64ddd1-554d-45e5-a816-50813bd57615",
+    "icv": 4,
+    "pih_b64": "qA3HkRQUbQXwAlKYM6s6IyX7WjI+yMCt5t2smzpszDU=",
+    "invoice_hash_b64": "IYq03q8oEoTzdcJP7ZW77ervAvdvDjLzyhv3bFD+6h8=",
+    "signed_at": "2026-05-17T04:16:06.431574+00:00",
+    "byte_lengths": {
+      "signed_xml": 10061,
+      "qr_base64": 492
+    }
+  },
+  {
+    "family": "standard_b2b",
+    "scenario": "credit_note",
+    "doc_type": "standard_credit_note",
+    "invoice_number": "DEMO-STD-005",
+    "uuid": "23383fbe-37a4-404d-b79a-afa1575be5a7",
+    "icv": 5,
+    "pih_b64": "IYq03q8oEoTzdcJP7ZW77ervAvdvDjLzyhv3bFD+6h8=",
+    "invoice_hash_b64": "o+HpwRrJsudQ9N+ojoglJknB9cPc/OU1C8lRIADFIu4=",
+    "signed_at": "2026-05-17T04:16:06.479547+00:00",
+    "byte_lengths": {
+      "signed_xml": 9124,
+      "qr_base64": 488
+    }
+  },
+  {
+    "family": "standard_b2b",
+    "scenario": "debit_note",
+    "doc_type": "standard_debit_note",
+    "invoice_number": "DEMO-STD-006",
+    "uuid": "3d26fe5a-e379-4c4b-b334-caee844c7935",
+    "icv": 6,
+    "pih_b64": "o+HpwRrJsudQ9N+ojoglJknB9cPc/OU1C8lRIADFIu4=",
+    "invoice_hash_b64": "j3EAXVgxXeorkxzV7k5THkUohUcThTAPteOMHFlTvSs=",
+    "signed_at": "2026-05-17T04:16:06.524938+00:00",
+    "byte_lengths": {
+      "signed_xml": 9098,
+      "qr_base64": 488
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "basic",
+    "doc_type": "simplified_invoice",
+    "invoice_number": "DEMO-SIM-001",
+    "uuid": "1783cdc8-eb0a-4114-91d4-06da22b37ece",
+    "icv": 1,
+    "pih_b64": "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==",
+    "invoice_hash_b64": "oRwNh+WyHloaNOHXnwxNuRZcc4y37Yp6kOVy/JqaTJs=",
+    "signed_at": "2026-05-17T04:16:06.568412+00:00",
+    "byte_lengths": {
+      "signed_xml": 8693,
+      "qr_base64": 396
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "line_discount",
+    "doc_type": "simplified_invoice",
+    "invoice_number": "DEMO-SIM-002",
+    "uuid": "c19937d9-fab3-4a74-bf0b-52999c9bef38",
+    "icv": 2,
+    "pih_b64": "oRwNh+WyHloaNOHXnwxNuRZcc4y37Yp6kOVy/JqaTJs=",
+    "invoice_hash_b64": "9oaMOLSIXDgIsaxbSJwaxPBU275qK7n+hARjcRP1hwY=",
+    "signed_at": "2026-05-17T04:16:06.614319+00:00",
+    "byte_lengths": {
+      "signed_xml": 9503,
+      "qr_base64": 396
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "multi_line_basket",
+    "doc_type": "simplified_invoice",
+    "invoice_number": "DEMO-SIM-003",
+    "uuid": "fe1c03c3-a519-484d-b0df-6b485e530d05",
+    "icv": 3,
+    "pih_b64": "9oaMOLSIXDgIsaxbSJwaxPBU275qK7n+hARjcRP1hwY=",
+    "invoice_hash_b64": "HlqqAzCxwyBEayysYVSU1E16H1vkkTtIQ2VlAgMMn2k=",
+    "signed_at": "2026-05-17T04:16:06.659084+00:00",
+    "byte_lengths": {
+      "signed_xml": 9888,
+      "qr_base64": 396
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "mixed_vat",
+    "doc_type": "simplified_invoice",
+    "invoice_number": "DEMO-SIM-004",
+    "uuid": "8ed7c1e6-1d34-4e09-8f9b-cd4158588537",
+    "icv": 4,
+    "pih_b64": "HlqqAzCxwyBEayysYVSU1E16H1vkkTtIQ2VlAgMMn2k=",
+    "invoice_hash_b64": "thICmHEFqSEA8Nc0ylSJo2NvSP87TcADdtRR0PMmpec=",
+    "signed_at": "2026-05-17T04:16:06.699401+00:00",
+    "byte_lengths": {
+      "signed_xml": 9804,
+      "qr_base64": 396
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "credit_note",
+    "doc_type": "simplified_credit_note",
+    "invoice_number": "DEMO-SIM-005",
+    "uuid": "0456cdcd-175a-49a0-8caf-6f818a6ad4a8",
+    "icv": 5,
+    "pih_b64": "thICmHEFqSEA8Nc0ylSJo2NvSP87TcADdtRR0PMmpec=",
+    "invoice_hash_b64": "GQIIyUmvdmHHRz9OQenWQamwJLdys233STUtUkRS+Jk=",
+    "signed_at": "2026-05-17T04:16:06.737250+00:00",
+    "byte_lengths": {
+      "signed_xml": 8867,
+      "qr_base64": 392
+    }
+  },
+  {
+    "family": "simplified_b2c",
+    "scenario": "debit_note",
+    "doc_type": "simplified_debit_note",
+    "invoice_number": "DEMO-SIM-006",
+    "uuid": "f14d251e-a36d-4a7f-89e5-196a1922502b",
+    "icv": 6,
+    "pih_b64": "GQIIyUmvdmHHRz9OQenWQamwJLdys233STUtUkRS+Jk=",
+    "invoice_hash_b64": "H5eWR9s0bLUZ0WV2RcOsxBiSRaDTyGB2ZRBmqftCvJI=",
+    "signed_at": "2026-05-17T04:16:06.779485+00:00",
+    "byte_lengths": {
+      "signed_xml": 8841,
+      "qr_base64": 392
+    }
+  },
+  {
+    "family": "other_types",
+    "scenario": "export_invoice",
+    "doc_type": "export_invoice",
+    "invoice_number": "DEMO-EXPORT-001",
+    "uuid": "463d365c-a3ec-443d-8dc9-5d8e7d4445f2",
+    "icv": 1,
+    "pih_b64": "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==",
+    "invoice_hash_b64": "CHXVMno38RP41H2vLCIO6Xjz1Jeg07GwF9o5EXplUKc=",
+    "signed_at": "2026-05-17T04:16:06.828490+00:00",
+    "byte_lengths": {
+      "signed_xml": 8771,
+      "qr_base64": 492
+    }
+  },
+  {
+    "family": "other_types",
+    "scenario": "summary_invoice",
+    "doc_type": "summary_invoice",
+    "invoice_number": "DEMO-SUMMARY-001",
+    "uuid": "c2059204-e336-4aa8-803b-0dfe03955543",
+    "icv": 2,
+    "pih_b64": "CHXVMno38RP41H2vLCIO6Xjz1Jeg07GwF9o5EXplUKc=",
+    "invoice_hash_b64": "ra5ubiyJgsPttZENTx2C53IR4s2sXoZ8zxYnj7/xROk=",
+    "signed_at": "2026-05-17T04:16:06.896557+00:00",
+    "byte_lengths": {
+      "signed_xml": 8868,
+      "qr_base64": 492
+    }
+  },
+  {
+    "family": "other_types",
+    "scenario": "self_billing_invoice",
+    "doc_type": "self_billing_invoice",
+    "invoice_number": "DEMO-SELFBILL-001",
+    "uuid": "28a0eb89-d598-4335-880e-16af407ea56d",
+    "icv": 3,
+    "pih_b64": "ra5ubiyJgsPttZENTx2C53IR4s2sXoZ8zxYnj7/xROk=",
+    "invoice_hash_b64": "Skuut+bxoNiLE6/AvuHnVQw7vHEWj0XzOWdey4oVQVg=",
+    "signed_at": "2026-05-17T04:16:06.946854+00:00",
+    "byte_lengths": {
+      "signed_xml": 8869,
+      "qr_base64": 492
+    }
+  },
+  {
+    "family": "other_types",
+    "scenario": "advance_payment_invoice",
+    "doc_type": "advance_payment_invoice",
+    "invoice_number": "DEMO-ADVANCE-001",
+    "uuid": "e1c835e6-7153-4d2f-8959-ed3fa8721e47",
+    "icv": 4,
+    "pih_b64": "Skuut+bxoNiLE6/AvuHnVQw7vHEWj0XzOWdey4oVQVg=",
+    "invoice_hash_b64": "QUA4UKmtwF93ZYTzZi4rU7fNZTZjtF81cGQJPb75anU=",
+    "signed_at": "2026-05-17T04:16:06.991056+00:00",
+    "byte_lengths": {
+      "signed_xml": 8772,
+      "qr_base64": 396
+    }
+  },
+  {
+    "family": "other_types",
+    "scenario": "nominal_supply_invoice",
+    "doc_type": "nominal_supply_invoice",
+    "invoice_number": "DEMO-NOMINAL-001",
+    "uuid": "9552d7b6-2626-40c9-9943-024d4d6fe1c6",
+    "icv": 5,
+    "pih_b64": "QUA4UKmtwF93ZYTzZi4rU7fNZTZjtF81cGQJPb75anU=",
+    "invoice_hash_b64": "Sz1BM6sKa2np/plPPep0uKeKZkR+kOrXDeluTCRGHgU=",
+    "signed_at": "2026-05-17T04:16:07.031465+00:00",
+    "byte_lengths": {
+      "signed_xml": 8772,
+      "qr_base64": 396
+    }
+  }
+]

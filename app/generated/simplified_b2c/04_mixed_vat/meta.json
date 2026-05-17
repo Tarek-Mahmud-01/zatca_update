@@ -1,0 +1,13 @@
+{
+  "doc_type": "simplified_invoice",
+  "invoice_number": "DEMO-SIM-004",
+  "uuid": "8ed7c1e6-1d34-4e09-8f9b-cd4158588537",
+  "icv": 4,
+  "pih_b64": "HlqqAzCxwyBEayysYVSU1E16H1vkkTtIQ2VlAgMMn2k=",
+  "invoice_hash_b64": "thICmHEFqSEA8Nc0ylSJo2NvSP87TcADdtRR0PMmpec=",
+  "signed_at": "2026-05-17T04:16:06.699401+00:00",
+  "byte_lengths": {
+    "signed_xml": 9804,
+    "qr_base64": 396
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "doc_type": "export_invoice",
+  "invoice_number": "DEMO-EXPORT-001",
+  "uuid": "463d365c-a3ec-443d-8dc9-5d8e7d4445f2",
+  "icv": 1,
+  "pih_b64": "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==",
+  "invoice_hash_b64": "CHXVMno38RP41H2vLCIO6Xjz1Jeg07GwF9o5EXplUKc=",
+  "signed_at": "2026-05-17T04:16:06.828490+00:00",
+  "byte_lengths": {
+    "signed_xml": 8771,
+    "qr_base64": 492
+  }
+}

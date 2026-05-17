@@ -1,0 +1,103 @@
+{
+  "invoice_number": "DEMO-STD-004",
+  "uuid": "1a64ddd1-554d-45e5-a816-50813bd57615",
+  "issue_date": "2026-05-17",
+  "issue_time": "04:16:06",
+  "icv": 4,
+  "pih_b64": "qA3HkRQUbQXwAlKYM6s6IyX7WjI+yMCt5t2smzpszDU=",
+  "currency": "SAR",
+  "tax_currency": "SAR",
+  "supplier": {
+    "registration_name": "Al-Rukn Al-Hasan Trading Establishment",
+    "vat_number": "300025187600003",
+    "crn": "300025187600003",
+    "street": "Riyadh, Al-Naseem Al-Sharqi, Abdullah bin Suleim, 11689",
+    "building_number": "0001",
+    "city_subdivision": "District",
+    "city": "Riyadh",
+    "postal_zone": "00000",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "customer": {
+    "registration_name": "Compliance Test Buyer LTD",
+    "vat_number": "399999999800003",
+    "crn": null,
+    "street": "Salah Al-Din",
+    "building_number": "1111",
+    "city_subdivision": "Al-Murooj",
+    "city": "Riyadh",
+    "postal_zone": "12222",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Software license",
+      "quantity": "1",
+      "unit_code": "PCE",
+      "unit_price": "500.00",
+      "line_extension": "500.00",
+      "tax_amount": "75.00",
+      "rounding_amount": "575.00",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "discount_amount": "0",
+      "discount_reason": null,
+      "charge_amount": "0",
+      "charge_reason": null
+    },
+    {
+      "id": "2",
+      "name": "Export-only training (zero rated)",
+      "quantity": "1",
+      "unit_code": "PCE",
+      "unit_price": "500.00",
+      "line_extension": "500.00",
+      "tax_amount": "0.00",
+      "rounding_amount": "500.00",
+      "tax_category": "Z",
+      "tax_percent": "0",
+      "discount_amount": "0",
+      "discount_reason": null,
+      "charge_amount": "0",
+      "charge_reason": null
+    }
+  ],
+  "tax_subtotals": [
+    {
+      "taxable_amount": "500.00",
+      "tax_amount": "75.00",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "exemption_reason_code": null,
+      "exemption_reason": null
+    },
+    {
+      "taxable_amount": "500.00",
+      "tax_amount": "0.00",
+      "tax_category": "Z",
+      "tax_percent": "0",
+      "exemption_reason_code": "VATEX-SA-32",
+      "exemption_reason": "Export of services"
+    }
+  ],
+  "monetary_totals": {
+    "line_extension": "1000.00",
+    "tax_exclusive": "1000.00",
+    "tax_inclusive": "1075.00",
+    "allowance_total": "0",
+    "charge_total": "0",
+    "prepaid_amount": "0",
+    "payable_amount": "1075.00"
+  },
+  "payment_means_code": "10",
+  "notes": [],
+  "instruction_note": null,
+  "billing_reference_id": null,
+  "document_charges": [],
+  "doc_type": "standard_invoice"
+}

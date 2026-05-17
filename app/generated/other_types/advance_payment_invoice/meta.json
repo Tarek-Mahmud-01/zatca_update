@@ -1,0 +1,13 @@
+{
+  "doc_type": "advance_payment_invoice",
+  "invoice_number": "DEMO-ADVANCE-001",
+  "uuid": "e1c835e6-7153-4d2f-8959-ed3fa8721e47",
+  "icv": 4,
+  "pih_b64": "Skuut+bxoNiLE6/AvuHnVQw7vHEWj0XzOWdey4oVQVg=",
+  "invoice_hash_b64": "QUA4UKmtwF93ZYTzZi4rU7fNZTZjtF81cGQJPb75anU=",
+  "signed_at": "2026-05-17T04:16:06.991056+00:00",
+  "byte_lengths": {
+    "signed_xml": 8772,
+    "qr_base64": 396
+  }
+}

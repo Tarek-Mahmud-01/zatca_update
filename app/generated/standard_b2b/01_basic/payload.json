@@ -1,0 +1,79 @@
+{
+  "invoice_number": "DEMO-STD-001",
+  "uuid": "8152806a-0951-4495-a6a4-21e497566443",
+  "issue_date": "2026-05-17",
+  "issue_time": "04:16:06",
+  "icv": 1,
+  "pih_b64": "NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==",
+  "currency": "SAR",
+  "tax_currency": "SAR",
+  "supplier": {
+    "registration_name": "Al-Rukn Al-Hasan Trading Establishment",
+    "vat_number": "300025187600003",
+    "crn": "300025187600003",
+    "street": "Riyadh, Al-Naseem Al-Sharqi, Abdullah bin Suleim, 11689",
+    "building_number": "0001",
+    "city_subdivision": "District",
+    "city": "Riyadh",
+    "postal_zone": "00000",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "customer": {
+    "registration_name": "Compliance Test Buyer LTD",
+    "vat_number": "399999999800003",
+    "crn": null,
+    "street": "Salah Al-Din",
+    "building_number": "1111",
+    "city_subdivision": "Al-Murooj",
+    "city": "Riyadh",
+    "postal_zone": "12222",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Consulting services",
+      "quantity": "1",
+      "unit_code": "PCE",
+      "unit_price": "100.00",
+      "line_extension": "100.00",
+      "tax_amount": "15.00",
+      "rounding_amount": "115.00",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "discount_amount": "0",
+      "discount_reason": null,
+      "charge_amount": "0",
+      "charge_reason": null
+    }
+  ],
+  "tax_subtotals": [
+    {
+      "taxable_amount": "100.00",
+      "tax_amount": "15.00",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "exemption_reason_code": null,
+      "exemption_reason": null
+    }
+  ],
+  "monetary_totals": {
+    "line_extension": "100.00",
+    "tax_exclusive": "100.00",
+    "tax_inclusive": "115.00",
+    "allowance_total": "0",
+    "charge_total": "0",
+    "prepaid_amount": "0",
+    "payable_amount": "115.00"
+  },
+  "payment_means_code": "10",
+  "notes": [],
+  "instruction_note": null,
+  "billing_reference_id": null,
+  "document_charges": [],
+  "doc_type": "standard_invoice"
+}

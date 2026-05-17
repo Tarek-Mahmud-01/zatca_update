@@ -1,0 +1,13 @@
+{
+  "doc_type": "standard_debit_note",
+  "invoice_number": "DEMO-STD-006",
+  "uuid": "3d26fe5a-e379-4c4b-b334-caee844c7935",
+  "icv": 6,
+  "pih_b64": "o+HpwRrJsudQ9N+ojoglJknB9cPc/OU1C8lRIADFIu4=",
+  "invoice_hash_b64": "j3EAXVgxXeorkxzV7k5THkUohUcThTAPteOMHFlTvSs=",
+  "signed_at": "2026-05-17T04:16:06.524938+00:00",
+  "byte_lengths": {
+    "signed_xml": 9098,
+    "qr_base64": 488
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "invoice_number": "DEMO-SIM-005",
+  "uuid": "0456cdcd-175a-49a0-8caf-6f818a6ad4a8",
+  "issue_date": "2026-05-17",
+  "issue_time": "04:16:06",
+  "icv": 5,
+  "pih_b64": "thICmHEFqSEA8Nc0ylSJo2NvSP87TcADdtRR0PMmpec=",
+  "currency": "SAR",
+  "tax_currency": "SAR",
+  "supplier": {
+    "registration_name": "Al-Rukn Al-Hasan Trading Establishment",
+    "vat_number": "300025187600003",
+    "crn": "300025187600003",
+    "street": "Riyadh, Al-Naseem Al-Sharqi, Abdullah bin Suleim, 11689",
+    "building_number": "0001",
+    "city_subdivision": "District",
+    "city": "Riyadh",
+    "postal_zone": "00000",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "customer": {
+    "registration_name": "Walk-in Customer",
+    "vat_number": null,
+    "crn": null,
+    "street": "Walk-in",
+    "building_number": "0",
+    "city_subdivision": "N/A",
+    "city": "Riyadh",
+    "postal_zone": "00000",
+    "country_code": "SA",
+    "additional_id_scheme": null,
+    "additional_id_value": null
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Refund — consulting services (partial)",
+      "quantity": "1",
+      "unit_code": "PCE",
+      "unit_price": "50.00",
+      "line_extension": "50.00",
+      "tax_amount": "7.50",
+      "rounding_amount": "57.50",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "discount_amount": "0",
+      "discount_reason": null,
+      "charge_amount": "0",
+      "charge_reason": null
+    }
+  ],
+  "tax_subtotals": [
+    {
+      "taxable_amount": "50.00",
+      "tax_amount": "7.50",
+      "tax_category": "S",
+      "tax_percent": "15",
+      "exemption_reason_code": null,
+      "exemption_reason": null
+    }
+  ],
+  "monetary_totals": {
+    "line_extension": "50.00",
+    "tax_exclusive": "50.00",
+    "tax_inclusive": "57.50",
+    "allowance_total": "0",
+    "charge_total": "0",
+    "prepaid_amount": "0",
+    "payable_amount": "57.50"
+  },
+  "payment_means_code": "10",
+  "notes": [],
+  "instruction_note": "Partial refund against DEMO-SIM-001",
+  "billing_reference_id": "DEMO-SIM-001",
+  "document_charges": [],
+  "doc_type": "simplified_credit_note"
+}

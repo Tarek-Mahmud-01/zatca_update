@@ -1,0 +1,26 @@
+oid_section = new_oids
+[new_oids]
+registeredAddress = 2.5.4.26
+zatcaTemplate = 1.3.6.1.4.1.311.20.2
+
+[req]
+default_bits = 2048
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+[req_distinguished_name]
+C = SA
+OU = Al-Rukn Al-Hasan Trading Establishment
+O = Al-Rukn Al-Hasan Trading Establishment
+CN = GuruERP-ARAH
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment
+subjectAltName = dirName:alt_names
+zatcaTemplate = ASN1:PRINTABLESTRING:ZATCA-Code-Signing
+[alt_names]
+surname = 1-DTG|2-GuruERP|3-V320252
+UID = 300025187600003
+title = 1100
+registeredAddress = Riyadh, Al-Naseem Al-Sharqi, Abdullah bin Suleim, 11689
+businessCategory = Trading for Cooling Spare Parts

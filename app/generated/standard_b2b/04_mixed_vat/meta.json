@@ -1,0 +1,13 @@
+{
+  "doc_type": "standard_invoice",
+  "invoice_number": "DEMO-STD-004",
+  "uuid": "1a64ddd1-554d-45e5-a816-50813bd57615",
+  "icv": 4,
+  "pih_b64": "qA3HkRQUbQXwAlKYM6s6IyX7WjI+yMCt5t2smzpszDU=",
+  "invoice_hash_b64": "IYq03q8oEoTzdcJP7ZW77ervAvdvDjLzyhv3bFD+6h8=",
+  "signed_at": "2026-05-17T04:16:06.431574+00:00",
+  "byte_lengths": {
+    "signed_xml": 10061,
+    "qr_base64": 492
+  }
+}

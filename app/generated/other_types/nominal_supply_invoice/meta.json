@@ -1,0 +1,13 @@
+{
+  "doc_type": "nominal_supply_invoice",
+  "invoice_number": "DEMO-NOMINAL-001",
+  "uuid": "9552d7b6-2626-40c9-9943-024d4d6fe1c6",
+  "icv": 5,
+  "pih_b64": "QUA4UKmtwF93ZYTzZi4rU7fNZTZjtF81cGQJPb75anU=",
+  "invoice_hash_b64": "Sz1BM6sKa2np/plPPep0uKeKZkR+kOrXDeluTCRGHgU=",
+  "signed_at": "2026-05-17T04:16:07.031465+00:00",
+  "byte_lengths": {
+    "signed_xml": 8772,
+    "qr_base64": 396
+  }
+}

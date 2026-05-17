@@ -1,0 +1,13 @@
+{
+  "doc_type": "summary_invoice",
+  "invoice_number": "DEMO-SUMMARY-001",
+  "uuid": "c2059204-e336-4aa8-803b-0dfe03955543",
+  "icv": 2,
+  "pih_b64": "CHXVMno38RP41H2vLCIO6Xjz1Jeg07GwF9o5EXplUKc=",
+  "invoice_hash_b64": "ra5ubiyJgsPttZENTx2C53IR4s2sXoZ8zxYnj7/xROk=",
+  "signed_at": "2026-05-17T04:16:06.896557+00:00",
+  "byte_lengths": {
+    "signed_xml": 8868,
+    "qr_base64": 492
+  }
+}
