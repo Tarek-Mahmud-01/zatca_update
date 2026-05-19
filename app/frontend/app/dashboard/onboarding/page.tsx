@@ -13,26 +13,34 @@ const INVOICE_TYPE_PRESETS = [
   { value: "0100", label: "0100 — Simplified only",        explain: "B2C only (reporting). Six demo invoices." },
 ];
 
-type Step = 1 | 2 | 3 | 4 | 5;
+type Step = "1" | "2" | "3" | "4" | "5";
 const STEPS: ReadonlyArray<{ id: Step; label: string }> = [
-  { id: 1, label: "CSR" },
-  { id: 2, label: "Compliance CSID" },
-  { id: 3, label: "Demo invoices" },
-  { id: 4, label: "Production CSID" },
-  { id: 5, label: "Done" },
+  { id: "1", label: "CSR" },
+  { id: "2", label: "Compliance CSID" },
+  { id: "3", label: "Demo invoices" },
+  { id: "4", label: "Production CSID" },
+  { id: "5", label: "Done" },
 ];
 
 export default function OnboardingPage() {
   const [env] = useActiveEnv();
 
-  const [step, setStep] = useState<Step>(1);
+  const [step, setStep] = useState<Step>("1");
   const [csidId, setCsidId] = useState<string | null>(null);
   const [csrPem, setCsrPem] = useState("");
-  const [otp, setOtp] = useState("");
+  // Sandbox uses a fixed test OTP — pre-fill so users can't fat-finger it.
+  const [otp, setOtp] = useState(env === "sandbox" ? "123456" : "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [checkResult, setCheckResult] = useState<ComplianceCheckResponse | null>(null);
   const [previewItems, setPreviewItems] = useState<CompliancePreviewItem[]>([]);
+
+  // Re-fill the test OTP when the user switches to sandbox; clear it when
+  // switching to a non-sandbox env so they don't accidentally submit the
+  // sandbox value to simulation/production.
+  useEffect(() => {
+    setOtp(env === "sandbox" ? "123456" : "");
+  }, [env]);
 
   const [config, setConfig] = useState({
     common_name:                "GuruERP-ARAH",
@@ -48,7 +56,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     const token = getToken();
-    if (!token || !csidId || step !== 3) return;
+    if (!token || !csidId || step !== "3") return;
     api.previewComplianceCheck(token, csidId).then(setPreviewItems).catch(() => setPreviewItems([]));
   }, [csidId, step]);
 
@@ -62,14 +70,14 @@ export default function OnboardingPage() {
       const res = await api.generateCsr(token, env, config);
       setCsidId(res.csid_id);
       setCsrPem(res.csr_pem);
-      setStep(2);
+      setStep("2");
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
   async function issueCcsid() {
     const token = getToken();
     if (!token || !csidId) return;
     setBusy(true); setError(null);
-    try { await api.issueCompliance(token, csidId, otp); setStep(3); }
+    try { await api.issueCompliance(token, csidId, otp); setStep("3"); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
   async function runChecks() {
@@ -79,14 +87,14 @@ export default function OnboardingPage() {
     try {
       const res = await api.runComplianceCheck(token, csidId);
       setCheckResult(res);
-      if (res.all_passed) setStep(4);
+      if (res.all_passed) setStep("4");
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
   async function promote() {
     const token = getToken();
     if (!token || !csidId) return;
     setBusy(true); setError(null);
-    try { await api.issueProduction(token, csidId); setStep(5); }
+    try { await api.issueProduction(token, csidId); setStep("5"); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
 
@@ -106,7 +114,7 @@ export default function OnboardingPage() {
 
       {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
 
-      {step === 1 && (
+      {step === "1" && (
         <Card title="CSR config">
           <div className="flex flex-col gap-5">
             <Field label="Invoice-type bitmask" required hint={INVOICE_TYPE_PRESETS.find((p) => p.value === config.invoice_type)?.explain}>
@@ -152,18 +160,41 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {step === 2 && (
+      {step === "2" && (
         <Card
           title="Compliance CSID"
-          description={<>Generate a fresh OTP at <a className="text-[var(--color-accent)] hover:underline" target="_blank" rel="noreferrer" href="https://fatoora.zatca.gov.sa">fatoora.zatca.gov.sa</a> for org id <code className="font-mono">{config.organization_identifier}</code> and paste it below.</>}
+          description={
+            env === "sandbox" ? (
+              <>Sandbox accepts the fixed test OTP <code className="font-mono px-1.5 py-0.5 bg-[var(--color-bg-muted)] rounded">123456</code>. No portal visit needed.</>
+            ) : (
+              <>Generate a fresh OTP at <a className="text-[var(--color-accent)] hover:underline" target="_blank" rel="noreferrer" href="https://fatoora.zatca.gov.sa">fatoora.zatca.gov.sa</a> for org id <code className="font-mono">{config.organization_identifier}</code> and paste it below.</>
+            )
+          }
         >
           <details className="mb-3">
             <summary className="text-sm text-[var(--color-fg-muted)] cursor-pointer">CSR (for diagnostic)</summary>
             <pre className="mt-2 p-3 bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-md text-[11px] font-mono whitespace-pre-wrap break-all">{csrPem}</pre>
           </details>
           <FieldGrid cols={1}>
-            <Field label="OTP from Fatoora portal" required>
-              <input className="input font-mono" value={otp} onChange={(e) => setOtp(e.target.value)} autoComplete="one-time-code" />
+            <Field label="OTP" required hint={env === "sandbox" ? "Sandbox test OTP: 123456" : "From fatoora.zatca.gov.sa"}>
+              <div className="flex gap-2">
+                <input
+                  className="input font-mono flex-1"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  autoComplete="one-time-code"
+                  placeholder={env === "sandbox" ? "123456" : "Enter OTP"}
+                />
+                {env === "sandbox" && (
+                  <button
+                    type="button"
+                    className="btn btn-default whitespace-nowrap"
+                    onClick={() => setOtp("123456")}
+                  >
+                    Use test OTP
+                  </button>
+                )}
+              </div>
             </Field>
           </FieldGrid>
           <div className="mt-4">
@@ -174,7 +205,7 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {step === 3 && (
+      {step === "3" && (
         <Card
           title="Run compliance demo invoices"
           description="ZATCA requires demo invoices matching your CSR's bitmask to clear before production promotion."
@@ -237,7 +268,7 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {step === 4 && (
+      {step === "4" && (
         <Card title="Production CSID" description="Compliance checks passed. Promote to production now.">
           <button className="btn btn-primary" onClick={promote} disabled={busy}>
             {busy ? "Requesting PCSID…" : "Issue production CSID"}
@@ -245,7 +276,7 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {step === 5 && (
+      {step === "5" && (
         <Card>
           <Banner tone="success">
             <strong>Onboarding complete for {env}.</strong> You can now send live invoices through the API on this environment.

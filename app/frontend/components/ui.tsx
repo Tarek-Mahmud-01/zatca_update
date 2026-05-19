@@ -181,6 +181,8 @@ export function StatusDot({ status }: { status: string }) {
   const color =
     status === "cleared"  ? "bg-[var(--color-success)]" :
     status === "reported" ? "bg-[var(--color-success)]" :
+    status === "local_only" ? "bg-[var(--color-fg-muted)]" :
+    status === "draft"    ? "bg-[var(--color-fg-faint)]" :
     status === "queued" || status === "retrying" ? "bg-[var(--color-warning)]" :
     status === "rejected" || status.startsWith("failed") ? "bg-[var(--color-danger)]" :
     "bg-[var(--color-fg-faint)]";

@@ -72,6 +72,18 @@ async def submit_invoice_job(ctx: dict, invoice_id: str) -> str:
             await _emit(inv, "invoice.failed", error=inv.last_error)
             return "no_csid"
 
+        # Dev-cert invoices can't be validated by ZATCA — skip the network call.
+        if csid.is_dev:
+            inv.status = "local_only"
+            inv.last_error = (
+                "Signed locally with a development certificate. Complete ZATCA "
+                "onboarding (CSR → CCSID → PCSID) to submit real invoices."
+            )
+            inv.submitted_at = datetime.now(timezone.utc)
+            await db.commit()
+            await _emit(inv, "invoice.local_only", error=inv.last_error)
+            return "local_only"
+
         client = ZatcaClient(ZatcaEnv(inv.env))
         invoice_b64 = base64.b64encode(inv.signed_xml.encode()).decode()
         kind = "reporting" if inv.doc_type in REPORTING_FAMILY else "clearance"

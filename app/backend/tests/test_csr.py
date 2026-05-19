@@ -58,19 +58,42 @@ def test_public_key_is_secp256k1() -> None:
     assert isinstance(pk.curve, ec.SECP256K1)
 
 
-def test_subject_dn_order_is_C_OU_O_CN() -> None:
-    """The DER-encoded subject must start with C and end with CN.
-
-    cryptography exposes Name as an ordered sequence — we read it in encoding order.
+def test_subject_dn_order_is_C_O_OU_CN() -> None:
+    """The DER-encoded subject is C → O → OU → CN — matches the order
+    in ZATCA-issued certs (verified against Data/Input/cert.pem) and what
+    BouncyCastle's BCStyle (used by the ZATCA SDK) emits.
     """
     csr, _ = _build()
     oids = [a.oid.dotted_string for a in csr.subject]
     assert oids == [
         NameOID.COUNTRY_NAME.dotted_string,
-        NameOID.ORGANIZATIONAL_UNIT_NAME.dotted_string,
         NameOID.ORGANIZATION_NAME.dotted_string,
+        NameOID.ORGANIZATIONAL_UNIT_NAME.dotted_string,
         NameOID.COMMON_NAME.dotted_string,
     ]
+
+
+def test_subject_dn_attributes_are_printable_string() -> None:
+    """ZATCA's PKI rejects CSRs whose subject attributes are UTF8String —
+    verified empirically. BouncyCastle's BCStyle emits PrintableString for
+    ASCII-safe values, and ZATCA-issued certs use PrintableString too.
+    """
+    import base64
+    csr_pem = build_csr(_sample_config(), generate_private_key(), CsrTemplate.sandbox, pem=True)
+    body = "".join(
+        line for line in csr_pem.splitlines()
+        if not line.startswith("-----") and line.strip()
+    )
+    der = base64.b64decode(body)
+    cfg = _sample_config()
+    for value in (cfg.country_name, cfg.organization_name, cfg.organization_unit_name, cfg.common_name):
+        idx = der.find(value.encode("ascii"))
+        assert idx > 0, f"value {value!r} not found in DER"
+        # Two bytes before the value: tag, length. Tag 0x13 = PrintableString.
+        assert der[idx - 2] == 0x13, (
+            f"attribute {value!r} encoded as tag={hex(der[idx-2])}, expected "
+            f"PrintableString (0x13) — ZATCA rejects UTF8String here."
+        )
 
 
 def test_subject_dn_values() -> None:

@@ -16,12 +16,16 @@ const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
   { href: "/dashboard/products",              label: "Products",   group: "Catalog" },
   { href: "/dashboard/invoices",              label: "Invoices",   group: "Billing" },
   { href: "/dashboard/invoices/batch",        label: "Batch upload", group: "Billing" },
-  { href: "/dashboard/settings/business",     label: "Business",     group: "Settings" },
-  { href: "/dashboard/onboarding",            label: "ZATCA onboarding", group: "Settings" },
-  { href: "/dashboard/settings/api-target",   label: "API target",   group: "Settings" },
-  { href: "/dashboard/settings/preferences",  label: "Preferences",  group: "Settings" },
-  { href: "/dashboard/settings/users",        label: "Team members", group: "Settings" },
-  { href: "/dashboard/settings/account",      label: "Account",      group: "Settings" },
+  { href: "/dashboard/settings/business",      label: "Business",         group: "Settings" },
+  { href: "/dashboard/settings/currencies",    label: "Currencies",       group: "Settings" },
+  { href: "/dashboard/settings/exchange-rates", label: "Exchange rates",   group: "Settings" },
+  { href: "/dashboard/settings/organizations", label: "Organizations",    group: "Settings" },
+  { href: "/dashboard/settings/branches",      label: "Branches",         group: "Settings" },
+  { href: "/dashboard/onboarding",             label: "ZATCA onboarding", group: "Settings" },
+  { href: "/dashboard/settings/api-target",    label: "API target",       group: "Settings" },
+  { href: "/dashboard/settings/preferences",   label: "Preferences",      group: "Settings" },
+  { href: "/dashboard/settings/users",         label: "Team members",     group: "Settings" },
+  { href: "/dashboard/settings/account",       label: "Account",          group: "Settings" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

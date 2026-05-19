@@ -3,12 +3,21 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, type Customer, type Product } from "../../../../lib/api-client";
+import {
+  api,
+  type BusinessSettings,
+  type Customer,
+  type Product,
+  type TenantBranch,
+  type TenantCurrency,
+  type TenantOrganization,
+} from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { useActiveEnv } from "../../../../lib/active-env";
 import { EnvBadge } from "../../../../components/EnvSwitcher";
 import { Banner, Card, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
 import { DatePicker } from "../../../../components/DatePicker";
+import { SearchSelect } from "../../../../components/SearchSelect";
 import { pushNotification } from "../../../../lib/notifications";
 import { PAYMENT_METHODS, VAT_BY_CODE, VAT_CATEGORIES } from "../../../../lib/catalog";
 
@@ -102,6 +111,21 @@ export default function NewInvoicePage() {
   // Initialised from the tenant's default once we know it; user can override on
   // the Details tab.
   const [submitChoice, setSubmitChoice] = useState<"draft" | "queued" | "immediate" | null>(null);
+  // Tenant business profile (currency, trade name, branch) — applied to every
+  // signed invoice this page produces.
+  const [business, setBusiness] = useState<BusinessSettings | null>(null);
+  // Multi-currency / multi-org / multi-branch profile from /api/v1/settings/*.
+  // The picked currency drives `currency` + the exchange-rate label; the
+  // picked organization+branch drive the supplier block.
+  const [tenantCurrencies, setTenantCurrencies] = useState<TenantCurrency[]>([]);
+  const [organizations, setOrganizations] = useState<TenantOrganization[]>([]);
+  const [branchList, setBranchList] = useState<TenantBranch[]>([]);
+  const [selectedCurrencyId, setSelectedCurrencyId] = useState<string>("");
+  const [selectedOrgId, setSelectedOrgId] = useState<string>("");
+  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
+  // Logged-in user's preferred branch (from /me.default_branch_id). Beats
+  // the tenant-wide default branch when picking the initial selection.
+  const [userDefaultBranchId, setUserDefaultBranchId] = useState<string | null>(null);
 
   // ------ load catalog + tenant queue config ------
   useEffect(() => {
@@ -121,7 +145,79 @@ export default function NewInvoicePage() {
         setTenantStrategy("immediate");
         setSubmitChoice((prev) => prev ?? "immediate");
       });
+    api.getBusinessSettings(token)
+      .then(setBusiness)
+      .catch(() => { /* fall back to defaults below */ });
+    // /me first so we know the user's default branch before pre-selecting.
+    api.me(token)
+      .then((m) => setUserDefaultBranchId(m.default_branch_id ?? null))
+      .catch(() => setUserDefaultBranchId(null));
+    Promise.all([
+      api.listCurrencies(token),
+      api.listOrganizations(token),
+      api.listBranches(token),
+    ]).then(([ccys, orgs, brs]) => {
+      setTenantCurrencies(ccys);
+      setOrganizations(orgs);
+      setBranchList(brs);
+      setSelectedCurrencyId((prev) => prev || (ccys.find((c) => c.is_default)?.id ?? ccys[0]?.id ?? ""));
+      setSelectedOrgId((prev) => prev || (orgs.find((o) => o.is_default)?.id ?? orgs[0]?.id ?? ""));
+      // Branch pre-selection priority:
+      //   1) the user's per-user default (if it still exists)
+      //   2) the tenant-wide default branch
+      //   3) the first branch on the list
+      // The next effect re-checks ownership against the picked organization.
+      setSelectedBranchId((prev) => {
+        if (prev) return prev;
+        return "";  // resolved by the user-default effect once /me + branches both land
+      });
+    }).catch(() => { /* leave selectors empty — UI shows "loading…" */ });
   }, []);
+
+  // Apply user's default branch as soon as both /me and the branch list are loaded.
+  useEffect(() => {
+    if (selectedBranchId) return;
+    if (branchList.length === 0) return;
+    const userBranch = userDefaultBranchId
+      ? branchList.find((b) => b.id === userDefaultBranchId)
+      : null;
+    const fallback = branchList.find((b) => b.is_default) ?? branchList[0];
+    const pick = userBranch ?? fallback;
+    if (pick) {
+      setSelectedBranchId(pick.id);
+      // Make sure the organization matches the picked branch.
+      setSelectedOrgId((prev) => prev || pick.organization_id);
+    }
+  }, [userDefaultBranchId, branchList, selectedBranchId]);
+
+  // Drop the selected branch if it doesn't belong to the picked organization.
+  useEffect(() => {
+    if (!selectedBranchId) return;
+    const br = branchList.find((b) => b.id === selectedBranchId);
+    if (br && br.organization_id !== selectedOrgId) setSelectedBranchId("");
+  }, [selectedOrgId, selectedBranchId, branchList]);
+
+  // Derived: selected currency / org / branch (with safe fallbacks).
+  const selectedCurrency = useMemo(
+    () => tenantCurrencies.find((c) => c.id === selectedCurrencyId) ?? null,
+    [tenantCurrencies, selectedCurrencyId],
+  );
+  const defaultCurrency = useMemo(
+    () => tenantCurrencies.find((c) => c.is_default) ?? null,
+    [tenantCurrencies],
+  );
+  const selectedOrg = useMemo(
+    () => organizations.find((o) => o.id === selectedOrgId) ?? null,
+    [organizations, selectedOrgId],
+  );
+  const selectedBranch = useMemo(
+    () => branchList.find((b) => b.id === selectedBranchId) ?? null,
+    [branchList, selectedBranchId],
+  );
+  const branchesForOrg = useMemo(
+    () => branchList.filter((b) => b.organization_id === selectedOrgId),
+    [branchList, selectedOrgId],
+  );
 
   // ------ keep the autocomplete dropdown anchored to the active input ------
   useEffect(() => {
@@ -263,6 +359,15 @@ export default function NewInvoicePage() {
   async function submit(submitMode: "immediate" | "queued" | "draft") {
     const token = getToken();
     if (!token) return;
+    // Branch is required when any branch is configured on the tenant.
+    if (branchList.length > 0 && !selectedBranchId) {
+      pushNotification({
+        tone: "danger", title: "Branch is required",
+        body: "Pick a branch on the Details tab before submitting.",
+      });
+      setTab("details");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -284,6 +389,45 @@ export default function NewInvoicePage() {
         subtotals.set(key, cur);
       }
 
+      // Supplier identity: prefer the picked organization+branch, fall back to
+      // the legacy single-field business profile, then to the tenant defaults.
+      const supplierName =
+        selectedOrg?.trade_name || selectedOrg?.name ||
+        business?.trade_name || business?.name || "Tenant supplier";
+      const supplierVat = selectedOrg?.vat_number || business?.vat_number || "300000000000003";
+      // Currency: pick the selected row; if it's not the base, attach an exchange-rate note.
+      const documentCurrency = (selectedCurrency?.code || business?.currency || "SAR").toUpperCase();
+      const supplierNotes: Array<[string, string]> = [];
+      if (selectedBranch) {
+        supplierNotes.push(["en", `Branch: ${selectedBranch.name}${selectedBranch.code ? ` (${selectedBranch.code})` : ""}`]);
+      } else if (business?.branch_name) {
+        supplierNotes.push(["en", `Branch: ${business.branch_name}`]);
+      }
+      if (
+        selectedCurrency && defaultCurrency &&
+        selectedCurrency.id !== defaultCurrency.id
+      ) {
+        supplierNotes.push([
+          "en",
+          `Currency: 1 ${selectedCurrency.code} = ${selectedCurrency.exchange_rate} ${defaultCurrency.code} (as of ${selectedCurrency.as_of_date})`,
+        ]);
+      }
+
+      // Branch address takes precedence over org address (more specific).
+      const addr = selectedBranch ?? selectedOrg ?? null;
+      const supplierAddress = {
+        street: (addr && addr.street) || "Street",
+        building_number: (addr && addr.building_number) || "0001",
+        city_subdivision:
+          (selectedBranch && selectedBranch.city_subdivision) ||
+          selectedBranch?.name ||
+          (selectedOrg && selectedOrg.city_subdivision) ||
+          business?.branch_name || "District",
+        city: (addr && addr.city) || "Riyadh",
+        postal_zone: (addr && addr.postal_zone) || "00000",
+        country_code: (addr && addr.country_code) || "SA",
+      };
+
       const payload = {
         doc_type: docType,
         invoice_number: invoiceNumber,
@@ -292,12 +436,12 @@ export default function NewInvoicePage() {
         issue_time: now.toISOString().slice(11, 19),
         icv: 0,
         pih_b64: "",
+        currency: documentCurrency,
+        tax_currency: documentCurrency,
         supplier: {
-          registration_name: "Tenant supplier",
-          vat_number: "300000000000003",
-          street: "Street", building_number: "0001",
-          city_subdivision: "District", city: "Riyadh",
-          postal_zone: "00000", country_code: "SA",
+          registration_name: supplierName,
+          vat_number: supplierVat,
+          ...supplierAddress,
         },
         customer: customer ? {
           registration_name: customer.name,
@@ -340,10 +484,30 @@ export default function NewInvoicePage() {
           prepaid_amount: "0",
           payable_amount: payable.toFixed(2),
         },
+        document_charges: (() => {
+          if (invoiceDiscount <= 0) return [];
+          const cats = [...subtotals.values()];
+          let remaining = invoiceDiscount;
+          return cats.flatMap((s, i) => {
+            const dc = i === cats.length - 1
+              ? round2(remaining)
+              : round2(invoiceDiscount * (taxableTotal > 0 ? s.taxable / taxableTotal : 1 / cats.length));
+            remaining = round2(remaining - dc);
+            if (dc <= 0) return [];
+            return [{
+              is_charge: false,
+              reason: "Invoice discount",
+              reason_code: "95",
+              amount: dc.toFixed(2),
+              tax_category: s.code,
+              tax_percent: String(s.percent),
+            }];
+          });
+        })(),
         payment_means_code: paymentMethod,
         instruction_note:    needsBillingRef ? (instructionNote || null) : null,
         billing_reference_id: needsBillingRef ? (billingRefId   || null) : null,
-        notes: [],
+        notes: supplierNotes,
       };
       if (!payload.customer) throw new Error("Pick a customer (or use a simplified doc type for walk-in).");
       const res = await api.submitInvoice(token, { env, payload, submit_mode: submitMode });
@@ -380,13 +544,6 @@ export default function NewInvoicePage() {
 
       <PageHeader
         title="New invoice"
-        description={
-          <span>
-            {tenantStrategy === "queued"
-              ? <>Tenant queue is <strong>batched</strong> — invoices ship at the next scheduled release. Use <em>Submit now</em> to bypass.</>
-              : <>Submits to <strong>{env}</strong>. Pick a customer, add products, then review.</>}
-          </span>
-        }
         actions={<EnvBadge />}
       />
 
@@ -408,38 +565,89 @@ export default function NewInvoicePage() {
           <Card title="Document">
             <FieldGrid cols={2}>
               <Field label="Document type" required>
-                <select className="input" value={docType} onChange={(e) => setDocType(e.target.value as DocType)}>
-                  {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                <SearchSelect
+                  value={docType}
+                  onChange={(v) => setDocType(v as DocType)}
+                  options={DOC_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                  searchPlaceholder="Search document types…"
+                />
               </Field>
               <Field label="Invoice number" required>
                 <input className="input" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} required />
               </Field>
-              <Field
-                label="Invoice date"
-                required
-                hint="The invoice's issue date — written to cbc:IssueDate on the UBL document."
-              >
+              <Field label="Invoice date" required>
                 <DatePicker
                   value={issueDate}
                   onChange={(v) => setIssueDate(v || new Date().toISOString().slice(0, 10))}
                 />
               </Field>
-              <Field label="Payment method"
-                     hint={PAYMENT_METHODS.find((p) => p.code === paymentMethod)?.hint}>
-                <select className="input" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                  {PAYMENT_METHODS.map((p) => <option key={p.code} value={p.code}>{p.code} — {p.label}</option>)}
-                </select>
+              <Field label="Payment method">
+                <SearchSelect
+                  value={paymentMethod}
+                  onChange={setPaymentMethod}
+                  options={PAYMENT_METHODS.map((p) => ({ value: p.code, label: `${p.code} — ${p.label}` }))}
+                  searchPlaceholder="Search payment methods…"
+                />
               </Field>
             </FieldGrid>
 
+            {/* Supplier identity selectors. Branch is required when the
+                tenant has any branches; the single-org / single-currency
+                cases are hidden (auto-picked). */}
+            {(() => {
+              const showOrg = organizations.length > 1;
+              const showBranch = branchList.length > 0;   // require when any branch exists tenant-wide
+              const showCcy = tenantCurrencies.length > 1;
+              const visible = [showOrg, showBranch, showCcy].filter(Boolean).length;
+              if (visible === 0) return null;
+              const cols = visible === 1 ? 1 : visible === 2 ? 2 : 3;
+              return (
+                <FieldGrid cols={cols}>
+                  {showOrg && (
+                    <Field label="Organization" required>
+                      <SearchSelect
+                        value={selectedOrgId}
+                        onChange={setSelectedOrgId}
+                        options={organizations.map((o) => ({ value: o.id, label: o.name + (o.is_default ? " (default)" : "") }))}
+                        searchPlaceholder="Search organizations…"
+                      />
+                    </Field>
+                  )}
+                  {showBranch && (
+                    <Field label="Branch" required>
+                      <SearchSelect
+                        value={selectedBranchId}
+                        onChange={setSelectedBranchId}
+                        placeholder="— select branch —"
+                        options={branchesForOrg.map((b) => ({ value: b.id, label: b.name + (b.code ? ` · ${b.code}` : "") + (b.is_default ? " (default)" : "") }))}
+                        searchPlaceholder="Search branches…"
+                      />
+                    </Field>
+                  )}
+                  {showCcy && (
+                    <Field label="Currency" required>
+                      <SearchSelect
+                        value={selectedCurrencyId}
+                        onChange={setSelectedCurrencyId}
+                        options={tenantCurrencies.map((c) => ({ value: c.id, label: c.code + (c.is_default ? " (default)" : ` · 1 = ${c.exchange_rate}`) }))}
+                        searchPlaceholder="Search currencies…"
+                      />
+                    </Field>
+                  )}
+                </FieldGrid>
+              );
+            })()}
+
+            {selectedCurrency && defaultCurrency && selectedCurrency.id !== defaultCurrency.id && selectedCurrency.as_of_date !== issueDate && (
+              <p className="text-xs text-[var(--color-warning)] mt-2">
+                ⚠ Exchange rate for {selectedCurrency.code} is dated {selectedCurrency.as_of_date}, invoice date is {issueDate}.
+                Update the rate in Business settings if it's stale.
+              </p>
+            )}
+
             {needsBillingRef && (
               <div className="mt-4 flex flex-col gap-4">
-                <Field
-                  label="Reference invoice"
-                  required
-                  hint="Pick a cleared/reported invoice to auto-fill customer + line items, or type the invoice number manually."
-                >
+                <Field label="Reference invoice" required>
                   <div className="relative">
                     <input
                       className="input"
@@ -474,10 +682,7 @@ export default function NewInvoicePage() {
                   </div>
                 </Field>
 
-                <Field
-                  label="Reason / instruction note"
-                  hint="Pick a common reason or type your own. Surfaced on the note as InstructionNote."
-                >
+                <Field label="Reason / instruction note">
                   <input
                     className="input"
                     list="cn-dn-reasons"
@@ -500,49 +705,31 @@ export default function NewInvoicePage() {
             )}
           </Card>
 
-          <Card
-            title="Action when you submit"
-            description={tenantStrategy
-              ? <>Tenant default is <strong className="text-[var(--color-fg)]">{tenantStrategy === "queued" ? "queued (batched)" : "immediate"}</strong> — pre-selected. Override per invoice if needed.</>
-              : "Loading tenant default…"}
-          >
-            <Field
-              label="Submit action"
-              hint={
-                submitChoice === "draft"     ? "Stays parked. Promote to queue or submit later from the invoice list."
-              : submitChoice === "queued"    ? "Signed + persisted now; ships at the next scheduled release."
-              : submitChoice === "immediate" ? "Bypass the queue schedule and push to ZATCA immediately."
-                                             : ""
-              }
-            >
+          <Card title="Submit action">
+            <Field label="On submit">
               <select
                 className="input"
                 value={submitChoice ?? ""}
                 disabled={submitChoice === null}
                 onChange={(e) => setSubmitChoice(e.target.value as "draft" | "queued" | "immediate")}
               >
-                <option value="draft">
-                  Save as draft
-                </option>
-                <option value="queued">
-                  Save to queue{tenantStrategy === "queued" ? " (tenant default)" : ""}
-                </option>
-                <option value="immediate">
-                  Submit to {env} now{tenantStrategy === "immediate" ? " (tenant default)" : ""}
-                </option>
+                <option value="draft">Save as draft</option>
+                <option value="queued">Save to queue{tenantStrategy === "queued" ? " (default)" : ""}</option>
+                <option value="immediate">Submit to {env} now{tenantStrategy === "immediate" ? " (default)" : ""}</option>
               </select>
             </Field>
           </Card>
 
-          <Card title="Customer" description={isB2C ? "Optional for B2C — defaults to walk-in." : "Required for B2B clearance."}>
+          <Card title="Customer">
             <FieldGrid cols={1}>
               <Field label="Pick customer">
-                <select className="input" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-                  <option value="">— {isB2C ? "Walk-in customer" : "Select a customer"} —</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}{c.vat_number ? ` · ${c.vat_number}` : ""}</option>
-                  ))}
-                </select>
+                <SearchSelect
+                  value={customerId}
+                  onChange={setCustomerId}
+                  placeholder={`— ${isB2C ? "Walk-in customer" : "Select a customer"} —`}
+                  options={customers.map((c) => ({ value: c.id, label: c.name, hint: c.vat_number ? `VAT ${c.vat_number}` : undefined }))}
+                  searchPlaceholder="Search customers…"
+                />
               </Field>
             </FieldGrid>
             {customer && (
@@ -568,7 +755,6 @@ export default function NewInvoicePage() {
         <div className="flex flex-col gap-4">
           <Card
             title="Line items"
-            description="Start typing in Item to search the product catalog, or type freely. Quantity × Unit price − Discount = Line extension. VAT computed live."
             actions={
               <button type="button" onClick={addBlankLine} className="btn btn-default !py-1 !px-2 text-xs">+ Add line</button>
             }
@@ -617,17 +803,15 @@ export default function NewInvoicePage() {
                       </div>
                       <div className="md:col-span-2">
                         <div className="label mb-1">VAT</div>
-                        <select
-                          className="input"
+                        <SearchSelect
                           value={l.vat_code}
-                          onChange={(e) => {
-                            const code = e.target.value as LineForm["vat_code"];
-                            const cat = VAT_BY_CODE[code];
-                            updateLine(i, { vat_code: code, vat_percent: String(cat?.defaultPercent ?? 15) });
+                          onChange={(code) => {
+                            const cat = VAT_BY_CODE[code as LineForm["vat_code"]];
+                            updateLine(i, { vat_code: code as LineForm["vat_code"], vat_percent: String(cat?.defaultPercent ?? 15) });
                           }}
-                        >
-                          {VAT_CATEGORIES.map((v) => <option key={v.code} value={v.code}>{v.code} · {v.defaultPercent}%</option>)}
-                        </select>
+                          options={VAT_CATEGORIES.map((v) => ({ value: v.code, label: `${v.code} · ${v.defaultPercent}%` }))}
+                          searchPlaceholder="Search VAT…"
+                        />
                       </div>
                       <div className="md:col-span-1 flex md:flex-col md:items-end md:justify-end justify-between gap-1">
                         <div className="tabular-nums text-sm font-medium text-[var(--color-fg)]">{(c.lineExt + c.tax).toFixed(2)}</div>
@@ -694,59 +878,6 @@ export default function NewInvoicePage() {
             );
           })()}
 
-          <Card title="Invoice-level adjustments" description="Document-wide discount. Reduces the taxable base, VAT is recomputed on the discounted total.">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-[var(--color-fg-2)]">Discount mode</span>
-                <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden text-sm w-fit">
-                  <button
-                    type="button"
-                    onClick={() => setInvoiceDiscountMode("percent")}
-                    className={`px-3 py-1.5 transition-colors ${
-                      invoiceDiscountMode === "percent"
-                        ? "bg-[var(--color-accent)] text-white"
-                        : "bg-white text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
-                    }`}
-                  >
-                    %
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInvoiceDiscountMode("amount")}
-                    className={`px-3 py-1.5 transition-colors border-l border-[var(--color-border)] ${
-                      invoiceDiscountMode === "amount"
-                        ? "bg-[var(--color-accent)] text-white"
-                        : "bg-white text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
-                    }`}
-                  >
-                    SAR
-                  </button>
-                </div>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-[var(--color-fg-2)]">
-                  {invoiceDiscountMode === "percent" ? "Discount %" : "Discount amount (SAR)"}
-                </span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  max={invoiceDiscountMode === "percent" ? 100 : undefined}
-                  step={invoiceDiscountMode === "percent" ? 0.1 : 0.01}
-                  className="input tabular-nums"
-                  style={{ width: 140 }}
-                  value={invoiceDiscountValue}
-                  onChange={(e) => setInvoiceDiscountValue(e.target.value)}
-                />
-              </div>
-              {invoiceDiscount > 0 && (
-                <div className="text-xs text-[var(--color-fg-muted)] pb-2">
-                  → −<span className="tabular-nums">{invoiceDiscount.toFixed(2)}</span> SAR off taxable.
-                  New payable: <span className="tabular-nums font-medium text-[var(--color-fg)]">{payable.toFixed(2)}</span>
-                </div>
-              )}
-            </div>
-          </Card>
 
           <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
             <button className="btn btn-default" onClick={() => setTab("details")}>← Back</button>
@@ -805,9 +936,37 @@ export default function NewInvoicePage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-4 border-b border-[var(--color-border)]">
                 <div>
                   <div className="label mb-1">From (supplier)</div>
-                  <div className="text-sm font-medium text-[var(--color-fg)]">Tenant supplier</div>
-                  <div className="text-xs text-[var(--color-fg-muted)] font-mono mt-0.5">VAT 300000000000003</div>
-                  <div className="text-xs text-[var(--color-fg-muted)] mt-1">0001 Street, District, Riyadh 00000, SA</div>
+                  {(() => {
+                    const supName =
+                      selectedOrg?.trade_name || selectedOrg?.name ||
+                      business?.trade_name || business?.name || "Tenant supplier";
+                    const supLegal = selectedOrg?.name || business?.name;
+                    const supVat = selectedOrg?.vat_number || business?.vat_number || "300000000000003";
+                    const addr = selectedBranch ?? selectedOrg ?? null;
+                    const addrLine = [
+                      addr?.building_number || "0001",
+                      addr?.street || "Street",
+                      (selectedBranch?.city_subdivision || selectedOrg?.city_subdivision || business?.branch_name || "District"),
+                      addr?.city || "Riyadh",
+                      addr?.postal_zone || "00000",
+                      addr?.country_code || "SA",
+                    ].join(", ");
+                    return (
+                      <>
+                        <div className="text-sm font-medium text-[var(--color-fg)]">{supName}</div>
+                        {supLegal && supLegal !== supName && (
+                          <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">Legal name: {supLegal}</div>
+                        )}
+                        <div className="text-xs text-[var(--color-fg-muted)] font-mono mt-0.5">VAT {supVat}</div>
+                        <div className="text-xs text-[var(--color-fg-muted)] mt-1">{addrLine}</div>
+                        {selectedBranch && (
+                          <div className="text-[10px] text-[var(--color-fg-muted)] mt-0.5">
+                            Branch: {selectedBranch.name}{selectedBranch.code ? ` (${selectedBranch.code})` : ""}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div>
                   <div className="label mb-1">To (customer)</div>
@@ -870,56 +1029,56 @@ export default function NewInvoicePage() {
                 </div>
               </div>
 
-              {/* VAT breakdown + totals */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4">
-                <div>
-                  <div className="label mb-2">VAT breakdown</div>
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-xs text-[var(--color-fg-muted)] border-b border-[var(--color-border)]">
-                        <th className="text-left py-1.5 font-medium">Category</th>
-                        <th className="text-right py-1.5 font-medium">Taxable</th>
-                        <th className="text-right py-1.5 font-medium">VAT</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...vatGroups.values()].map((g) => (
-                        <tr key={`${g.code}-${g.percent}`} className="border-b last:border-b-0 border-[var(--color-border-soft)]">
-                          <td className="py-1.5">{g.code} · {g.percent}%</td>
-                          <td className="py-1.5 text-right tabular-nums">{g.taxable.toFixed(2)}</td>
-                          <td className="py-1.5 text-right tabular-nums">{g.tax.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              {/* Totals block — full-width, discount row has inline controls */}
+              <div className="flex flex-col text-sm pt-4 divide-y divide-[var(--color-border-soft)]">
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-[var(--color-fg-muted)]">Line extension</span>
+                  <span className="tabular-nums">{lineExtTotal.toFixed(2)}</span>
                 </div>
-                <div className="flex flex-col gap-1 text-sm sm:items-end">
-                  <div className="flex justify-between w-full sm:w-64">
-                    <span className="text-[var(--color-fg-muted)]">Line extension</span>
-                    <span className="tabular-nums">{lineExtTotal.toFixed(2)}</span>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-[var(--color-fg-muted)]">Invoice discount</span>
+                  <div className="flex items-center gap-2">
+                    <div className="inline-flex rounded border border-[var(--color-border)] overflow-hidden text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setInvoiceDiscountMode("percent")}
+                        className={`px-2.5 py-1.5 transition-colors ${invoiceDiscountMode === "percent" ? "bg-[var(--color-accent)] text-white" : "bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-hover)]"}`}
+                      >%</button>
+                      <button
+                        type="button"
+                        onClick={() => setInvoiceDiscountMode("amount")}
+                        className={`px-2.5 py-1.5 border-l border-[var(--color-border)] transition-colors ${invoiceDiscountMode === "amount" ? "bg-[var(--color-accent)] text-white" : "bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-hover)]"}`}
+                      >Amt</button>
+                    </div>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      max={invoiceDiscountMode === "percent" ? 100 : undefined}
+                      step={invoiceDiscountMode === "percent" ? 0.1 : 0.01}
+                      className="input tabular-nums !py-1 text-right"
+                      style={{ width: 100 }}
+                      value={invoiceDiscountValue}
+                      onChange={(e) => setInvoiceDiscountValue(e.target.value)}
+                    />
+                    <span className="tabular-nums w-24 text-right">
+                      {invoiceDiscount > 0 ? `−${invoiceDiscount.toFixed(2)}` : "—"}
+                    </span>
                   </div>
-                  {invoiceDiscount > 0 && (
-                    <>
-                      <div className="flex justify-between w-full sm:w-64">
-                        <span className="text-[var(--color-fg-muted)]">
-                          Invoice discount{invoiceDiscountMode === "percent" && Number(invoiceDiscountValue) > 0 ? ` (${Number(invoiceDiscountValue)}%)` : ""}
-                        </span>
-                        <span className="tabular-nums text-[var(--color-fg-muted)]">−{invoiceDiscount.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between w-full sm:w-64">
-                        <span className="text-[var(--color-fg-muted)]">Taxable</span>
-                        <span className="tabular-nums">{taxableTotal.toFixed(2)}</span>
-                      </div>
-                    </>
-                  )}
-                  <div className="flex justify-between w-full sm:w-64">
-                    <span className="text-[var(--color-fg-muted)]">VAT total</span>
-                    <span className="tabular-nums">{taxTotal.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-[var(--color-fg-muted)]">Subtotal</span>
+                  <span className="tabular-nums">{taxableTotal.toFixed(2)}</span>
+                </div>
+                {[...vatGroups.values()].map((g) => (
+                  <div key={`${g.code}-${g.percent}`} className="flex items-center justify-between py-2">
+                    <span className="text-[var(--color-fg-muted)]">VAT {g.code} ({g.percent}%)</span>
+                    <span className="tabular-nums">{g.tax.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between w-full sm:w-64 border-t border-[var(--color-border)] pt-2 mt-2 font-semibold text-base">
-                    <span>Payable (SAR)</span>
-                    <span className="tabular-nums">{payable.toFixed(2)}</span>
-                  </div>
+                ))}
+                <div className="flex items-center justify-between py-3 font-semibold text-base">
+                  <span>Total ({selectedCurrency?.code || business?.currency || "SAR"})</span>
+                  <span className="tabular-nums">{payable.toFixed(2)}</span>
                 </div>
               </div>
 

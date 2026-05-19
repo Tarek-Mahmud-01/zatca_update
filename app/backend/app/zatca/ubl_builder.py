@@ -493,7 +493,8 @@ def build_unsigned_ubl(payload: _InvoiceBase) -> bytes:
     monetary.append(_amount("LineExtensionAmount", mt.line_extension, payload.currency))
     monetary.append(_amount("TaxExclusiveAmount", mt.tax_exclusive, payload.currency))
     monetary.append(_amount("TaxInclusiveAmount", mt.tax_inclusive, payload.currency))
-    monetary.append(_amount("AllowanceTotalAmount", mt.allowance_total, payload.currency))
+    if mt.allowance_total > 0:
+        monetary.append(_amount("AllowanceTotalAmount", mt.allowance_total, payload.currency))
     if mt.charge_total > 0:
         monetary.append(_amount("ChargeTotalAmount", mt.charge_total, payload.currency))
     monetary.append(_amount("PrepaidAmount", mt.prepaid_amount, payload.currency))

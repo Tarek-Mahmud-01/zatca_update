@@ -60,6 +60,7 @@ class MeResponse(BaseModel):
     tenant_name: str
     vat_number: str
     organization_identifier: str
+    default_branch_id: str | None = None
 
 
 @router.get("/me", response_model=MeResponse)
@@ -76,6 +77,7 @@ async def get_me(user: CurrentUserDep, db: DbSession) -> MeResponse:
         tenant_name=tenant.name,
         vat_number=tenant.vat_number,
         organization_identifier=tenant.organization_identifier,
+        default_branch_id=str(tenant_user.default_branch_id) if tenant_user.default_branch_id else None,
     )
 
 

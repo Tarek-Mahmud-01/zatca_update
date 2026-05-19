@@ -20,6 +20,7 @@ export interface Me {
   tenant_name: string;
   vat_number: string;
   organization_identifier: string;
+  default_branch_id: string | null;
 }
 
 export interface TenantUser {
@@ -28,17 +29,82 @@ export interface TenantUser {
   role: "admin" | "member" | "viewer";
   created_at: string;
   is_me: boolean;
+  default_branch_id: string | null;
+}
+
+export type QueueScheduleMode = "times" | "interval";
+
+export interface BusinessSettings {
+  tenant_id: string;
+  name: string;
+  vat_number: string;
+  organization_identifier: string;
+  currency: string;        // ISO 4217 — e.g. SAR (legacy "selected default")
+  trade_name: string | null;
+  branch_name: string | null;
+}
+
+export interface TenantCurrency {
+  id: string;
+  code: string;                  // ISO 4217
+  exchange_rate: string;         // "1 unit code = exchange_rate units of base"; string for precision
+  as_of_date: string;            // ISO yyyy-mm-dd
+  is_default: boolean;
+}
+
+export interface TenantOrganization {
+  id: string;
+  name: string;
+  trade_name: string | null;
+  vat_number: string | null;
+  registration_number: string | null;
+  street: string | null;
+  building_number: string | null;
+  city_subdivision: string | null;
+  city: string | null;
+  postal_zone: string | null;
+  country_code: string;
+  is_default: boolean;
+}
+
+export interface TenantBranch {
+  id: string;
+  organization_id: string;       // FK → TenantOrganization.id
+  name: string;
+  code: string | null;
+  street: string | null;
+  building_number: string | null;
+  city_subdivision: string | null;
+  city: string | null;
+  postal_zone: string | null;
+  country_code: string;
+  is_default: boolean;
 }
 
 export interface TenantSettings {
   queue_strategy: "immediate" | "queued";
+  queue_schedule_mode: QueueScheduleMode;
+  // Used when mode = "times". List of "HH:MM" (UTC) release times.
+  queue_schedule_times: string[];
+  // Used when mode = "interval". Minutes between releases, anchored at midnight UTC.
+  queue_schedule_interval_minutes: number;
+  // Legacy throttle. Server still returns it but ignores it for the new model.
   queue_throttle_per_minute: number;
 }
 
 export interface ProcessQueueResult {
   released: number;
-  throttle_per_minute: number;
   remaining_queued: number;
+  schedule_mode: QueueScheduleMode;
+  schedule_times: string[];
+  schedule_interval_minutes: number;
+  skipped_reason: string | null;
+}
+
+export interface ReleaseInvoiceResult {
+  id: string;
+  status: string;
+  submit_mode: "arq" | "inline";
 }
 
 export interface AmendResult {
@@ -125,7 +191,13 @@ export interface SubmitInvoiceResponse {
   status: string;
   invoice_hash: string;
   icv: number;
-  submit_mode?: "immediate" | "queued";
+  submit_mode?: "immediate" | "queued" | "draft";
+}
+
+export interface PromoteDraftResult {
+  id: string;
+  status: string;
+  submit_mode: "queued" | "arq" | "inline";
 }
 
 export interface BatchInvoiceItem {
@@ -230,7 +302,10 @@ export const api = {
   me(token: string) { return request<Me>("/api/v1/auth/me", { token }); },
 
   listTenantUsers(token: string) { return request<TenantUser[]>("/api/v1/tenant-users", { token }); },
-  inviteTenantUser(token: string, body: { email: string; password: string; role: string }) {
+  inviteTenantUser(
+    token: string,
+    body: { email: string; password: string; role: string; default_branch_id?: string | null },
+  ) {
     return request<TenantUser>("/api/v1/tenant-users", {
       method: "POST", body: JSON.stringify(body), token,
     });
@@ -238,6 +313,11 @@ export const api = {
   updateTenantUserRole(token: string, id: string, role: string) {
     return request<TenantUser>(`/api/v1/tenant-users/${id}`, {
       method: "PATCH", body: JSON.stringify({ role }), token,
+    });
+  },
+  updateTenantUserBranch(token: string, id: string, default_branch_id: string | null) {
+    return request<TenantUser>(`/api/v1/tenant-users/${id}`, {
+      method: "PATCH", body: JSON.stringify({ default_branch_id }), token,
     });
   },
   async removeTenantUser(token: string, id: string): Promise<void> {
@@ -410,19 +490,137 @@ export const api = {
     if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}: ${await res.text()}`);
   },
 
+  // ---- Business profile (legacy single-field shape) ----
+  getBusinessSettings(token: string) {
+    return request<BusinessSettings>("/api/v1/settings/business", { token });
+  },
+  putBusinessSettings(
+    token: string,
+    body: { currency: string; trade_name: string | null; branch_name: string | null },
+  ) {
+    return request<BusinessSettings>("/api/v1/settings/business", {
+      method: "PUT", body: JSON.stringify(body), token,
+    });
+  },
+
+  // ---- Tenant currencies (multi) ----
+  listCurrencies(token: string) {
+    return request<TenantCurrency[]>("/api/v1/settings/currencies", { token });
+  },
+  createCurrency(
+    token: string,
+    body: { code: string; exchange_rate: string; as_of_date?: string; is_default?: boolean },
+  ) {
+    return request<TenantCurrency>("/api/v1/settings/currencies", {
+      method: "POST", body: JSON.stringify(body), token,
+    });
+  },
+  updateCurrency(
+    token: string, id: string,
+    body: { code: string; exchange_rate: string; as_of_date?: string; is_default?: boolean },
+  ) {
+    return request<TenantCurrency>(`/api/v1/settings/currencies/${id}`, {
+      method: "PATCH", body: JSON.stringify(body), token,
+    });
+  },
+  async deleteCurrency(token: string, id: string): Promise<void> {
+    const res = await fetch(`${BACKEND}/api/v1/settings/currencies/${id}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}: ${await res.text()}`);
+  },
+
+  // ---- Tenant organizations (multi) ----
+  listOrganizations(token: string) {
+    return request<TenantOrganization[]>("/api/v1/settings/organizations", { token });
+  },
+  createOrganization(token: string, body: Partial<TenantOrganization>) {
+    return request<TenantOrganization>("/api/v1/settings/organizations", {
+      method: "POST", body: JSON.stringify(body), token,
+    });
+  },
+  updateOrganization(token: string, id: string, body: Partial<TenantOrganization>) {
+    return request<TenantOrganization>(`/api/v1/settings/organizations/${id}`, {
+      method: "PATCH", body: JSON.stringify(body), token,
+    });
+  },
+  async deleteOrganization(token: string, id: string): Promise<void> {
+    const res = await fetch(`${BACKEND}/api/v1/settings/organizations/${id}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}: ${await res.text()}`);
+  },
+
+  // ---- Tenant branches (multi, FK → organization) ----
+  listBranches(token: string) {
+    return request<TenantBranch[]>("/api/v1/settings/branches", { token });
+  },
+  createBranch(token: string, body: Partial<TenantBranch> & { organization_id: string }) {
+    return request<TenantBranch>("/api/v1/settings/branches", {
+      method: "POST", body: JSON.stringify(body), token,
+    });
+  },
+  updateBranch(
+    token: string, id: string,
+    body: Partial<TenantBranch> & { organization_id: string },
+  ) {
+    return request<TenantBranch>(`/api/v1/settings/branches/${id}`, {
+      method: "PATCH", body: JSON.stringify(body), token,
+    });
+  },
+  async deleteBranch(token: string, id: string): Promise<void> {
+    const res = await fetch(`${BACKEND}/api/v1/settings/branches/${id}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}: ${await res.text()}`);
+  },
+
   // ---- Tenant queue settings ----
   getTenantSettings(token: string) {
     return request<TenantSettings>("/api/v1/settings/tenant", { token });
   },
-  putTenantSettings(token: string, body: TenantSettings) {
+  putTenantSettings(
+    token: string,
+    body: {
+      queue_strategy: "immediate" | "queued";
+      queue_schedule_mode: QueueScheduleMode;
+      queue_schedule_times: string[];
+      queue_schedule_interval_minutes: number;
+      queue_throttle_per_minute: number;
+    },
+  ) {
     return request<TenantSettings>("/api/v1/settings/tenant", {
       method: "PUT", body: JSON.stringify(body), token,
     });
   },
 
   // ---- Queue ops ----
-  processQueue(token: string) {
-    return request<ProcessQueueResult>("/api/v1/invoices/process-queue", { method: "POST", token });
+  // force=false: only release if current UTC HH:MM matches a scheduled time.
+  // force=true : ignore schedule, release all queued items in one batch.
+  processQueue(token: string, opts: { force?: boolean } = {}) {
+    return request<ProcessQueueResult>("/api/v1/invoices/process-queue", {
+      method: "POST",
+      body: JSON.stringify({ force: !!opts.force }),
+      token,
+    });
+  },
+
+  releaseInvoice(token: string, id: string) {
+    return request<ReleaseInvoiceResult>(`/api/v1/invoices/${id}/release`, {
+      method: "POST", token,
+    });
+  },
+
+  promoteDraft(token: string, id: string, opts: { submit_now?: boolean } = {}) {
+    return request<PromoteDraftResult>(`/api/v1/invoices/${id}/promote`, {
+      method: "POST",
+      body: JSON.stringify({ submit_now: !!opts.submit_now }),
+      token,
+    });
+  },
+
+  resignInvoice(token: string, id: string) {
+    return request<InvoiceDetail>(`/api/v1/invoices/${id}/resign`, { method: "POST", token });
   },
 
   // ---- Invoice amend (auto CN/DN for delta) ----

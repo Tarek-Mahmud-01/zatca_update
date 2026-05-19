@@ -116,18 +116,27 @@ async def issue_compliance_csid(
     client = ZatcaClient(env)
     resp = await client.request_compliance_csid(csid.csr_pem, req.otp)
     if resp.status_code >= 400:
-        # ZATCA returns "Invalid-CSR" generically when the OTP is rejected too
-        # (verified empirically — only Missing-OTP differs). Surface a clearer
-        # hint to the user so they don't waste time chasing CSR-format ghosts.
+        # ZATCA returns "Invalid-CSR" generically for many things — including
+        # a wrong OTP — so we have to disambiguate by environment + payload.
+        # The CSR has already been verified structurally (correct OIDs, EC
+        # secp256k1, Microsoft template extension, etc.) when generated, so
+        # OTP mismatch is the overwhelmingly common cause.
         raw = resp.raw_text[:400]
         hint = ""
-        if "Invalid-CSR" in raw or "Invalid Request" in raw:
-            hint = (
-                " (this most commonly means the OTP is wrong/expired — "
-                "generate a fresh OTP at https://fatoora.zatca.gov.sa)"
-            )
-        elif "Missing-OTP" in raw:
-            hint = " (the OTP field is empty)"
+        if "Missing-OTP" in raw:
+            hint = " — the OTP field was empty when submitted."
+        elif "Invalid-CSR" in raw or "Invalid Request" in raw or resp.status_code == 400:
+            if env == ZatcaEnv.sandbox:
+                hint = (
+                    " — sandbox accepts only the test OTP '123456'. "
+                    "Check the OTP you entered and try again."
+                )
+            else:
+                hint = (
+                    " — most commonly the OTP is wrong/expired. "
+                    "Generate a fresh OTP at https://fatoora.zatca.gov.sa "
+                    "and try again."
+                )
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"zatca {resp.status_code}: {raw}{hint}",

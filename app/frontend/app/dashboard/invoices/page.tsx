@@ -16,16 +16,17 @@ import { pushNotification } from "../../../lib/notifications";
 import { Card, Empty, Field, PageHeader, StatusDot } from "../../../components/ui";
 import { DatePicker } from "../../../components/DatePicker";
 
-type StatusOption = "draft" | "queued" | "retrying" | "cleared" | "reported" | "rejected" | "failed_pending_review";
+type StatusOption = "draft" | "queued" | "retrying" | "cleared" | "reported" | "local_only" | "rejected" | "failed_pending_review";
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: StatusOption; label: string }> = [
-  { value: "draft",                  label: "Draft"    },
-  { value: "queued",                 label: "Queued"   },
-  { value: "retrying",               label: "Retrying" },
-  { value: "cleared",                label: "Cleared"  },
-  { value: "reported",               label: "Reported" },
-  { value: "rejected",               label: "Rejected" },
-  { value: "failed_pending_review",  label: "Failed"   },
+  { value: "draft",                  label: "Draft"      },
+  { value: "queued",                 label: "Queued"     },
+  { value: "retrying",               label: "Retrying"   },
+  { value: "cleared",                label: "Cleared"    },
+  { value: "reported",               label: "Reported"   },
+  { value: "local_only",             label: "Local only" },
+  { value: "rejected",               label: "Rejected"   },
+  { value: "failed_pending_review",  label: "Failed"     },
 ];
 
 export default function InvoicesPage() {
@@ -48,6 +49,18 @@ export default function InvoicesPage() {
   const [seeding, setSeeding] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [defaultCurrency, setDefaultCurrency] = useState<string>("");
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    api.listCurrencies(token)
+      .then((list) => {
+        const def = list.find((c) => c.is_default) ?? list[0];
+        if (def) setDefaultCurrency(def.code);
+      })
+      .catch(() => {});
+  }, []);
 
   const reload = useCallback(async () => {
     const token = getToken();
@@ -252,7 +265,7 @@ export default function InvoicesPage() {
                   <th>Type</th>
                   <th>Issue date</th>
                   <th>Status</th>
-                  <th className="text-right">Total</th>
+                  <th className="text-right">Total{defaultCurrency ? ` (${defaultCurrency})` : ""}</th>
                   <th className="text-right"></th>
                 </tr>
               </thead>

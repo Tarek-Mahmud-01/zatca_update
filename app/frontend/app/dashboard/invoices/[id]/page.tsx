@@ -129,6 +129,17 @@ export default function InvoiceDetailPage() {
         }
       />
 
+      {inv.status === "local_only" && (
+        <div className="mb-4">
+          <Banner tone="warning">
+            <strong>Signed locally — not submitted to ZATCA.</strong>{" "}
+            This invoice was signed with a development certificate. ZATCA can&apos;t
+            validate it because the cert isn&apos;t in their chain of trust.
+            Complete the onboarding wizard (CSR → CCSID → PCSID) before submitting real invoices.
+          </Banner>
+        </div>
+      )}
+
       <Tabs<TabId>
         value={tab}
         onChange={setTab}
@@ -319,6 +330,9 @@ export default function InvoiceDetailPage() {
 
       {tab === "xml" && (
         <div className="flex flex-col gap-4">
+          <div className="flex gap-2">
+            <ResignButton id={inv.id} onDone={setInv} />
+          </div>
           {inv.signed_xml && (
             <Card title="Signed UBL XML" actions={
               <button className="btn btn-default !py-1 !px-2 text-xs" onClick={() => downloadText(`${p.invoice_number ?? inv.icv}.signed.xml`, inv.signed_xml!)}>
@@ -544,4 +558,38 @@ function downloadText(filename: string, content: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function ResignButton({ id, onDone }: { id: string; onDone: (inv: InvoiceDetail) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function resign() {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await api.resignInvoice(token, id);
+      onDone(updated);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        className="btn btn-ghost text-xs !py-1"
+        onClick={resign}
+        disabled={busy}
+      >
+        {busy ? "Re-signing…" : "Re-sign with current CSID"}
+      </button>
+      {err && <span className="text-xs text-[var(--color-danger)]">{err}</span>}
+    </div>
+  );
 }

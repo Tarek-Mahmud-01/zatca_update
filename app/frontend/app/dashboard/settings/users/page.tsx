@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type Me, type TenantUser } from "../../../../lib/api-client";
+import { useEffect, useMemo, useState } from "react";
+import {
+  api,
+  type Me,
+  type TenantBranch,
+  type TenantUser,
+} from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
 
@@ -12,6 +17,7 @@ export default function UsersPage() {
   const [tab, setTab] = useState<TabId>("list");
   const [me, setMe] = useState<Me | null>(null);
   const [users, setUsers] = useState<TenantUser[]>([]);
+  const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -20,9 +26,14 @@ export default function UsersPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const [meRes, list] = await Promise.all([api.me(token), api.listTenantUsers(token)]);
+      const [meRes, list, brs] = await Promise.all([
+        api.me(token),
+        api.listTenantUsers(token),
+        api.listBranches(token),
+      ]);
       setMe(meRes);
       setUsers(list);
+      setBranches(brs);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -43,6 +54,17 @@ export default function UsersPage() {
     }
   }
 
+  async function changeBranch(u: TenantUser, branchId: string | null) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api.updateTenantUserBranch(token, u.id, branchId);
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function remove(u: TenantUser) {
     if (!confirm(`Remove ${u.email}? They lose access immediately.`)) return;
     const token = getToken();
@@ -54,6 +76,11 @@ export default function UsersPage() {
       setError(String(e));
     }
   }
+
+  const branchesById = useMemo(
+    () => new Map(branches.map((b) => [b.id, b])),
+    [branches],
+  );
 
   const isAdmin = me?.role === "admin";
 
@@ -98,6 +125,7 @@ export default function UsersPage() {
                 <tr>
                   <th>Email</th>
                   <th>Role</th>
+                  <th>Default branch</th>
                   <th>Joined</th>
                   <th className="w-1 whitespace-nowrap text-right">Actions</th>
                 </tr>
@@ -121,6 +149,27 @@ export default function UsersPage() {
                         <span className="capitalize text-[var(--color-fg-2)]">{u.role}</span>
                       )}
                     </td>
+                    <td data-label="Default branch">
+                      {isAdmin ? (
+                        <select
+                          className="input !py-1 !w-auto text-xs"
+                          value={u.default_branch_id ?? ""}
+                          disabled={branches.length === 0}
+                          onChange={(e) => changeBranch(u, e.target.value || null)}
+                        >
+                          <option value="">— none —</option>
+                          {branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name}{b.code ? ` · ${b.code}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-[var(--color-fg-2)]">
+                          {u.default_branch_id ? (branchesById.get(u.default_branch_id)?.name ?? "—") : "—"}
+                        </span>
+                      )}
+                    </td>
                     <td data-label="Joined" className="text-[var(--color-fg-muted)]">
                       {new Date(u.created_at).toLocaleDateString()}
                     </td>
@@ -138,16 +187,23 @@ export default function UsersPage() {
       )}
 
       {tab === "invite" && isAdmin && (
-        <InviteForm onCancel={() => setTab("list")} onSaved={async () => { await reload(); setTab("list"); }} />
+        <InviteForm branches={branches} onCancel={() => setTab("list")} onSaved={async () => { await reload(); setTab("list"); }} />
       )}
     </div>
   );
 }
 
-function InviteForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => Promise<void> }) {
+function InviteForm({
+  branches, onCancel, onSaved,
+}: {
+  branches: TenantBranch[];
+  onCancel: () => void;
+  onSaved: () => Promise<void>;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<typeof ROLES[number]>("member");
+  const [defaultBranchId, setDefaultBranchId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,7 +214,10 @@ function InviteForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () =
     setBusy(true);
     setError(null);
     try {
-      await api.inviteTenantUser(token, { email, password, role });
+      await api.inviteTenantUser(token, {
+        email, password, role,
+        default_branch_id: defaultBranchId || null,
+      });
       await onSaved();
     } catch (e) {
       setError(String(e));
@@ -181,6 +240,15 @@ function InviteForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () =
           </Field>
           <Field label="Temporary password" required hint="Min 8 characters">
             <input className="input" type="text" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete="new-password" />
+          </Field>
+          <Field label="Default branch" hint="Pre-selects this branch on new invoices for the user.">
+            <select className="input" value={defaultBranchId} disabled={branches.length === 0}
+              onChange={(e) => setDefaultBranchId(e.target.value)}>
+              <option value="">— none —</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}{b.code ? ` · ${b.code}` : ""}</option>
+              ))}
+            </select>
           </Field>
         </FieldGrid>
 

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Category, type Product } from "../../../lib/api-client";
 import { getToken } from "../../../lib/token";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
+import { SearchSelect } from "../../../components/SearchSelect";
 import { VAT_CATEGORIES } from "../../../lib/catalog";
 
 type TabId = "list" | "add";
@@ -230,10 +231,13 @@ function ProductForm({
 
         <FieldGrid cols={3}>
           <Field label="Category">
-            <select className="input" value={form.category_id ?? ""} onChange={(e) => upd("category_id", e.target.value)}>
-              <option value="">— Uncategorized —</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <SearchSelect
+              value={form.category_id ?? ""}
+              onChange={(v) => upd("category_id", v)}
+              placeholder="— Uncategorized —"
+              options={categories.map((c) => ({ value: c.id, label: c.name }))}
+              searchPlaceholder="Search categories…"
+            />
           </Field>
           <Field label="Unit price (SAR)" required>
             <input className="input tabular-nums" inputMode="decimal" value={form.unit_price} onChange={(e) => upd("unit_price", e.target.value)} required />
@@ -245,20 +249,16 @@ function ProductForm({
 
         <FieldGrid cols={2}>
           <Field label="VAT category" hint={selectedVat?.hint}>
-            <select
-              className="input"
+            <SearchSelect
               value={form.tax_category}
-              onChange={(e) => {
-                const code = e.target.value as typeof form.tax_category;
+              onChange={(code) => {
                 const cat = VAT_CATEGORIES.find((v) => v.code === code);
-                upd("tax_category", code);
+                upd("tax_category", code as typeof form.tax_category);
                 if (cat) upd("tax_percent", String(cat.defaultPercent));
               }}
-            >
-              {VAT_CATEGORIES.map((v) => (
-                <option key={v.code} value={v.code}>{v.code} — {v.label}</option>
-              ))}
-            </select>
+              options={VAT_CATEGORIES.map((v) => ({ value: v.code, label: `${v.code} — ${v.label}` }))}
+              searchPlaceholder="Search VAT categories…"
+            />
           </Field>
           <Field label="VAT percent">
             <input className="input tabular-nums" inputMode="decimal" value={form.tax_percent} onChange={(e) => upd("tax_percent", e.target.value)} />

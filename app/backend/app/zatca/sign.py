@@ -74,6 +74,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -82,6 +83,18 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from lxml import etree
+
+# Bouncy Castle's X500Name.toString() — the format ZATCA expects in
+# <ds:X509IssuerName> — separates RDN components with ", " (comma + space),
+# whereas Python's rfc4514_string() uses bare commas. The cert in the SDK
+# sample shows it as "CN=PRZEINVOICESCA4-CA, DC=extgazt, DC=gov, DC=local";
+# without this fix our digest of SignedProperties would never match ZATCA's.
+_RFC4514_COMMA = re.compile(r"(?<!\\),")
+
+
+def _bc_x500_string(name: x509.Name) -> str:
+    """Format a DN in Bouncy Castle's default style (", " separator)."""
+    return _RFC4514_COMMA.sub(", ", name.rfc4514_string())
 
 from app.zatca.canonicalize import NS, canonicalize, canonicalize_for_invoice_hash
 from app.zatca.hash import compute_invoice_hash
@@ -143,11 +156,11 @@ def _build_signed_properties(
     dm = etree.SubElement(cd, f"{{{NS['ds']}}}DigestMethod")
     dm.set("Algorithm", SHA256)
     dv = etree.SubElement(cd, f"{{{NS['ds']}}}DigestValue")
-    dv.text = _double_encoded_digest(cert.public_bytes(serialization.Encoding.PEM)).decode()
+    dv.text = _double_encoded_digest(cert.public_bytes(serialization.Encoding.DER)).decode()
 
     issuer = etree.SubElement(cert_el, f"{{{NS['xades']}}}IssuerSerial")
     iname = etree.SubElement(issuer, f"{{{NS['ds']}}}X509IssuerName")
-    iname.text = cert.issuer.rfc4514_string()
+    iname.text = _bc_x500_string(cert.issuer)
     iserial = etree.SubElement(issuer, f"{{{NS['ds']}}}X509SerialNumber")
     iserial.text = str(cert.serial_number)
 
@@ -194,30 +207,27 @@ def _build_signed_info(invoice_digest_b64: str, signed_props_digest_b64: str) ->
     return si
 
 
-def _build_signature_block(
+def _build_signature_block_skeleton(
     invoice_digest_b64: str,
-    private_key: ec.EllipticCurvePrivateKey,
     cert: x509.Certificate,
     cert_b64: str,
     signing_time: str,
-) -> tuple[etree._Element, str]:
-    """Returns the <ds:Signature> element and the raw signature_b64 (TLV tag 7 input)."""
-    signed_props = _build_signed_properties(cert, signing_time)
-    sp_canon = canonicalize(signed_props)
-    sp_digest_b64 = _double_encoded_digest(sp_canon).decode()
-
-    signed_info = _build_signed_info(invoice_digest_b64, sp_digest_b64)
-    si_canon = canonicalize(signed_info)
-    sig_raw = _ecdsa_sign_raw(private_key, si_canon)
-    sig_b64 = base64.b64encode(sig_raw).decode()
-
+) -> etree._Element:
+    """Build the <ds:Signature> structure with placeholder digest and signature
+    values. The actual SignedProperties digest and SignatureValue are filled in
+    later, after the element is in its document context (so c14n11 includes the
+    right namespace declarations).
+    """
     sig_nsmap = {"ds": NS["ds"], "xades": NS["xades"]}
     sig = etree.Element(f"{{{NS['ds']}}}Signature", nsmap=sig_nsmap)
     sig.set("Id", "signature")
+
+    # Placeholder SignedInfo with empty SignedProperties DigestValue.
+    signed_info = _build_signed_info(invoice_digest_b64, "")
     sig.append(signed_info)
 
-    sv = etree.SubElement(sig, f"{{{NS['ds']}}}SignatureValue")
-    sv.text = sig_b64
+    # Placeholder SignatureValue.
+    etree.SubElement(sig, f"{{{NS['ds']}}}SignatureValue")
 
     ki = etree.SubElement(sig, f"{{{NS['ds']}}}KeyInfo")
     x509data = etree.SubElement(ki, f"{{{NS['ds']}}}X509Data")
@@ -227,9 +237,9 @@ def _build_signature_block(
     obj = etree.SubElement(sig, f"{{{NS['ds']}}}Object")
     qp = etree.SubElement(obj, f"{{{NS['xades']}}}QualifyingProperties")
     qp.set("Target", "signature")
-    qp.append(signed_props)
+    qp.append(_build_signed_properties(cert, signing_time))
 
-    return sig, sig_b64
+    return sig
 
 
 def _wrap_in_ubl_extension(signature: etree._Element) -> etree._Element:
@@ -268,9 +278,15 @@ def sign_invoice(
 ) -> SignResult:
     """Produce the signed UBL bytes.
 
-    The input ``invoice_xml`` is the *unsigned* UBL — i.e. without UBLExtensions
-    but already containing the <cac:Signature> placeholder. The output has the
-    UBLExtensions inserted as the first child of <Invoice>.
+    Order matters: digests must be computed on the elements *in their final
+    document context* so the namespace declarations c14n11 emits match what
+    ZATCA's validator sees when it re-canonicalizes the same elements.
+
+    1. Insert a skeleton Signature into the invoice.
+    2. Canonicalize <xades:SignedProperties> in-context, compute its digest,
+       fill the SignedInfo Reference DigestValue.
+    3. Canonicalize <ds:SignedInfo> in-context, ECDSA-sign it, fill the
+       SignatureValue.
     """
     cert = x509.load_pem_x509_certificate(certificate_pem.encode())
     cert_b64 = _strip_cert(certificate_pem)
@@ -280,18 +296,36 @@ def sign_invoice(
     signing_time = signing_time or datetime.now(timezone.utc).replace(microsecond=0)
     signing_time_iso = signing_time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    signature, sig_b64 = _build_signature_block(
+    signature = _build_signature_block_skeleton(
         invoice_digest_b64=invoice_digest_b64,
-        private_key=private_key,
         cert=cert,
         cert_b64=cert_b64,
         signing_time=signing_time_iso,
     )
-
     ubl_extensions = _wrap_in_ubl_extension(signature)
 
     root = etree.fromstring(invoice_xml)
     root.insert(0, ubl_extensions)
+
+    # SignedProperties digest (in-context canonicalization).
+    sp_elem = root.xpath(".//xades:SignedProperties", namespaces=NS)[0]
+    sp_canon = etree.tostring(sp_elem, method="c14n", exclusive=False, with_comments=False)
+    sp_digest_b64 = _double_encoded_digest(sp_canon).decode()
+
+    sp_ref_dv = root.xpath(
+        ".//ds:Reference[@URI='#xadesSignedProperties']/ds:DigestValue",
+        namespaces=NS,
+    )[0]
+    sp_ref_dv.text = sp_digest_b64
+
+    # SignedInfo signature (in-context canonicalization).
+    si_elem = root.xpath(".//ds:SignedInfo", namespaces=NS)[0]
+    si_canon = etree.tostring(si_elem, method="c14n", exclusive=False, with_comments=False)
+    sig_raw = _ecdsa_sign_raw(private_key, si_canon)
+    sig_b64 = base64.b64encode(sig_raw).decode()
+
+    sv_elem = root.xpath(".//ds:SignatureValue", namespaces=NS)[0]
+    sv_elem.text = sig_b64
 
     signed = etree.tostring(root, xml_declaration=True, encoding="UTF-8")
     return SignResult(

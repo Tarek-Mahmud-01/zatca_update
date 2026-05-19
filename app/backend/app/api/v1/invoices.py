@@ -139,17 +139,35 @@ async def _try_enqueue_arq(invoice_id: UUID) -> bool:
 
 
 async def _advance_inline(db, tenant_id: UUID, inv: Invoice) -> None:
-    """Move a queued invoice to its terminal state (cleared / reported) directly
-    in the request handler. Used when arq isn't available — keeps the demo
-    flow moving so invoices don't get stuck in 'queued' forever.
+    """Move a queued invoice to its terminal state directly in the request
+    handler. Used when arq isn't available — keeps the demo flow moving so
+    invoices don't get stuck in 'queued' forever.
+
+    Dev-cert invoices are marked ``local_only`` so the UI shows them as
+    "signed but never sent to ZATCA" instead of falsely claiming cleared.
 
     For production with a real arq worker + Redis + reachable ZATCA, this path
     is skipped (the arq job handles the real submission instead).
     """
     if inv.status not in {"queued", "retrying"}:
         return
-    is_simplified = inv.doc_type in REPORTING_FAMILY
-    inv.status = "reported" if is_simplified else "cleared"
+    csid = await db.scalar(
+        select(Csid)
+        .where(
+            Csid.tenant_id == inv.tenant_id, Csid.env == inv.env,
+            Csid.kind == "production", Csid.revoked_at.is_(None),
+        )
+        .order_by(desc(Csid.issued_at))
+    )
+    if csid is not None and csid.is_dev:
+        inv.status = "local_only"
+        inv.last_error = (
+            "Signed locally with a development certificate. Complete ZATCA "
+            "onboarding (CSR → CCSID → PCSID) to submit real invoices."
+        )
+    else:
+        is_simplified = inv.doc_type in REPORTING_FAMILY
+        inv.status = "reported" if is_simplified else "cleared"
     inv.submitted_at = datetime.now(timezone.utc)
     await publish(
         tenant_id, f"invoice.{inv.status}",
@@ -423,6 +441,7 @@ async def seed_demo_invoices(
             secret="DEMO-SECRET",
             request_id="DEMO-REQ",
             issued_at=now,
+            is_dev=True,
         )
         db.add(csid)
         await db.flush()
@@ -958,6 +977,41 @@ async def get_invoice(invoice_id: UUID, user: CurrentUserDep, db: DbSession) -> 
             for s in subs
         ],
     )
+
+
+@router.post("/{invoice_id}/resign", response_model=InvoiceDetail)
+async def resign_invoice(invoice_id: UUID, user: CurrentUserDep, db: DbSession) -> InvoiceDetail:
+    """Re-sign an existing invoice with the current CSID.
+
+    Useful for testing after a signing code fix without creating a new invoice.
+    Updates signed_xml, invoice_hash, and qr_base64 in place.
+    """
+    from pydantic import TypeAdapter
+    from app.zatca.ubl_builder import InvoicePayload as _IP
+
+    inv = await db.scalar(
+        select(Invoice).where(Invoice.id == invoice_id, Invoice.tenant_id == user.tenant_id)
+    )
+    if inv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+    if not inv.payload_json:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no_payload")
+
+    csid = await _resolve_csid(db, user.tenant_id, inv.env)
+
+    payload = TypeAdapter(_IP).validate_python(inv.payload_json)
+    processed = process_invoice(
+        payload, private_key_pem=csid.private_key_pem, certificate_pem=csid.certificate_pem
+    )
+
+    inv.signed_xml    = processed.signed_xml.decode()
+    inv.invoice_hash  = processed.invoice_hash_b64
+    inv.qr_base64     = processed.qr_b64
+    inv.signed_at     = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(inv)
+
+    return await get_invoice(invoice_id, user, db)
 
 
 class InvoiceListItem(BaseModel):

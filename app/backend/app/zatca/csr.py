@@ -23,6 +23,7 @@ import base64
 from enum import Enum
 
 from cryptography import x509
+from cryptography.x509.name import _ASN1Type
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
@@ -113,19 +114,30 @@ def build_csr(
     """Build a CSR matching the SDK's openssl_temp.cnf recipe.
 
     Critical details (don't change without re-verifying against ZATCA simulation):
-      * Subject DN order: C, OU, O, CN  — RFC4514 prints reverse, but the DER
-        encoding ZATCA validates against must start with C.
+      * Subject DN order: C, O, OU, CN — matches the order in ZATCA-issued
+        certs (and what BouncyCastle's BCStyle emits).
+      * Subject attributes use PrintableString encoding — verified against
+        ZATCA's issued cert. Using UTF8String (cryptography's default) makes
+        ZATCA's CA return "Invalid-CSR".
       * keyUsage = digitalSignature, nonRepudiation, keyEncipherment
       * basicConstraints CA:FALSE
-      * SAN with directoryName (SN, UID, title, registeredAddress, businessCategory)
+      * SAN with directoryName (SN, UID, title, registeredAddress,
+        businessCategory) — these stay UTF8String, also matching the
+        issued-cert encoding.
       * customCertExtension 1.3.6.1.4.1.311.20.2 as PrintableString
     """
+    # Force PrintableString (ASN.1 tag 0x13) on subject DN attributes — that's
+    # how BouncyCastle's BCStyle (used by the ZATCA SDK) encodes ASCII values,
+    # and what ZATCA's PKI validates against.
+    def _ps(oid, value: str) -> x509.NameAttribute:
+        return x509.NameAttribute(oid, value, _type=_ASN1Type.PrintableString)
+
     subject = x509.Name(
         [
-            x509.NameAttribute(NameOID.COUNTRY_NAME, cfg.country_name),
-            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, cfg.organization_unit_name),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, cfg.organization_name),
-            x509.NameAttribute(NameOID.COMMON_NAME, cfg.common_name),
+            _ps(NameOID.COUNTRY_NAME, cfg.country_name),
+            _ps(NameOID.ORGANIZATION_NAME, cfg.organization_name),
+            _ps(NameOID.ORGANIZATIONAL_UNIT_NAME, cfg.organization_unit_name),
+            _ps(NameOID.COMMON_NAME, cfg.common_name),
         ]
     )
 
