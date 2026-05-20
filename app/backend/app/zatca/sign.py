@@ -81,7 +81,6 @@ from datetime import datetime, timezone
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from lxml import etree
 
 # Bouncy Castle's X500Name.toString() — the format ZATCA expects in
@@ -121,10 +120,14 @@ def _strip_cert(cert_pem: str) -> str:
     )
 
 
-def _ecdsa_sign_raw(private_key: ec.EllipticCurvePrivateKey, message: bytes) -> bytes:
-    der = private_key.sign(message, ec.ECDSA(hashes.SHA256()))
-    r, s = decode_dss_signature(der)
-    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+def _ecdsa_sign_der(private_key: ec.EllipticCurvePrivateKey, message: bytes) -> bytes:
+    """ZATCA expects the ECDSA SignatureValue in **DER** form (ASN.1 SEQUENCE
+    of r, s) — verified against the SDK reference QR/sample, whose
+    ds:SignatureValue decodes to 30 45 02 21 ... (DER), NOT the raw r||s
+    concatenation the XML-DSIG spec nominally calls for. ZATCA's reporting
+    QR validation rejects raw r||s with QRCODE_INVALID.
+    """
+    return private_key.sign(message, ec.ECDSA(hashes.SHA256()))
 
 
 def _double_encoded_digest(canonical_bytes: bytes) -> bytes:
@@ -321,8 +324,8 @@ def sign_invoice(
     # SignedInfo signature (in-context canonicalization).
     si_elem = root.xpath(".//ds:SignedInfo", namespaces=NS)[0]
     si_canon = etree.tostring(si_elem, method="c14n", exclusive=False, with_comments=False)
-    sig_raw = _ecdsa_sign_raw(private_key, si_canon)
-    sig_b64 = base64.b64encode(sig_raw).decode()
+    sig_der = _ecdsa_sign_der(private_key, si_canon)
+    sig_b64 = base64.b64encode(sig_der).decode()
 
     sv_elem = root.xpath(".//ds:SignatureValue", namespaces=NS)[0]
     sv_elem.text = sig_b64

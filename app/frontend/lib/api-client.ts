@@ -5,7 +5,10 @@
  * into `lib/api-types.ts` and replace the structural types below.
  */
 
-const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8001";
+// 127.0.0.1 (not "localhost") — uvicorn binds IPv4-only and Windows resolves
+// "localhost" to IPv6 ::1 first, causing "Failed to fetch". Override with
+// BACKEND_URL in the environment if your backend is elsewhere.
+const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8001";
 
 export interface TokenResponse {
   access_token: string;
@@ -285,6 +288,16 @@ async function request<T>(
   }
   const res = await fetch(`${BACKEND}${path}`, { ...init, headers });
   if (!res.ok) {
+    // Centralised auth-expired handling. Any 401 (and 403 on /me, which
+    // means the JWT is no longer valid) wipes the cookie and bounces to
+    // /login. Skip the login endpoint itself so a wrong-password error
+    // stays visible on the form instead of bouncing.
+    const isLoginEndpoint = path.startsWith("/api/v1/auth/login");
+    if (!isLoginEndpoint && (res.status === 401 || (res.status === 403 && path.includes("/auth/me")))) {
+      const { handleAuthExpired } = await import("./token");
+      handleAuthExpired();
+      throw new Error("auth_expired");
+    }
     const text = await res.text();
     throw new Error(`API ${res.status}: ${text}`);
   }

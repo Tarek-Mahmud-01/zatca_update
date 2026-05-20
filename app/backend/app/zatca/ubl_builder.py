@@ -255,15 +255,13 @@ def _type_name_attribute(doc_type: str) -> str:
 
 
 def _profile_id(doc_type: str) -> str:
-    """ProfileID — ZATCA uses ``reporting:1.0`` for simplified, ``clearance:1.0`` for standard."""
-    simplified_family = {
-        "simplified_invoice",
-        "simplified_credit_note",
-        "simplified_debit_note",
-        "nominal_supply_invoice",
-        "advance_payment_invoice",
-    }
-    return "reporting:1.0" if doc_type in simplified_family else "clearance:1.0"
+    """ProfileID (BT-23) — ZATCA mandates ``reporting:1.0`` for ALL invoice
+    types (standard and simplified alike). Verified against the SDK reference
+    samples and ZATCA rule BR-KSA-EN16931-01, which rejects anything else
+    (including ``clearance:1.0``) with "Business process (BT-23) must be
+    reporting:1.0".
+    """
+    return "reporting:1.0"
 
 
 # ---------------------------------------------------------------------------

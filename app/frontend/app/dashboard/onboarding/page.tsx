@@ -28,19 +28,18 @@ export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("1");
   const [csidId, setCsidId] = useState<string | null>(null);
   const [csrPem, setCsrPem] = useState("");
-  // Sandbox uses a fixed test OTP — pre-fill so users can't fat-finger it.
+  // Sandbox accepts the fixed test OTP `123456` (verified end-to-end with
+  // ZATCA's developer-portal returning HTTP 200 ISSUED). Simulation and
+  // production require a real OTP generated at https://fatoora.zatca.gov.sa.
   const [otp, setOtp] = useState(env === "sandbox" ? "123456" : "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [checkResult, setCheckResult] = useState<ComplianceCheckResponse | null>(null);
   const [previewItems, setPreviewItems] = useState<CompliancePreviewItem[]>([]);
 
-  // Re-fill the test OTP when the user switches to sandbox; clear it when
-  // switching to a non-sandbox env so they don't accidentally submit the
-  // sandbox value to simulation/production.
-  useEffect(() => {
-    setOtp(env === "sandbox" ? "123456" : "");
-  }, [env]);
+  // Keep the OTP synced to the active env (test value for sandbox, blank
+  // otherwise so the user doesn't accidentally submit a sandbox value).
+  useEffect(() => { setOtp(env === "sandbox" ? "123456" : ""); }, [env]);
 
   const [config, setConfig] = useState({
     common_name:                "GuruERP-ARAH",
@@ -108,8 +107,20 @@ export default function OnboardingPage() {
 
       <Tabs<Step>
         value={step}
-        onChange={(s) => { /* purely informational — driven by progress */ }}
-        items={STEPS.map((s) => ({ id: s.id, label: `${s.id}. ${s.label}`, disabled: s.id !== step }))}
+        onChange={(s) => {
+          // Allow stepping back to any earlier (or current) step. Forward
+          // steps stay disabled — they're gated on the previous one completing.
+          if (Number(s) <= Number(step)) {
+            setStep(s);
+            setError(null);
+          }
+        }}
+        items={STEPS.map((s) => ({
+          id: s.id,
+          label: `${s.id}. ${s.label}`,
+          // Future steps are disabled; current and past are clickable.
+          disabled: Number(s.id) > Number(step),
+        }))}
       />
 
       {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
@@ -152,7 +163,7 @@ export default function OnboardingPage() {
             </Field>
 
             <div>
-              <button className="btn btn-primary" onClick={generate} disabled={busy}>
+              <button type="button" className="btn btn-primary" onClick={generate} disabled={busy}>
                 {busy ? "Generating CSR…" : "Generate CSR"}
               </button>
             </div>
@@ -165,9 +176,9 @@ export default function OnboardingPage() {
           title="Compliance CSID"
           description={
             env === "sandbox" ? (
-              <>Sandbox accepts the fixed test OTP <code className="font-mono px-1.5 py-0.5 bg-[var(--color-bg-muted)] rounded">123456</code>. No portal visit needed.</>
+              <>Sandbox accepts the fixed test OTP <code className="font-mono px-1.5 py-0.5 bg-[var(--color-bg-muted)] rounded">123456</code> — already filled in for you. Just click below.</>
             ) : (
-              <>Generate a fresh OTP at <a className="text-[var(--color-accent)] hover:underline" target="_blank" rel="noreferrer" href="https://fatoora.zatca.gov.sa">fatoora.zatca.gov.sa</a> for org id <code className="font-mono">{config.organization_identifier}</code> and paste it below.</>
+              <>Generate a fresh OTP at <a className="text-[var(--color-accent)] hover:underline" target="_blank" rel="noreferrer" href="https://fatoora.zatca.gov.sa">fatoora.zatca.gov.sa</a> for org id <code className="font-mono">{config.organization_identifier}</code>, then paste it below. OTPs are valid for ~1 hour.</>
             )
           }
         >
@@ -176,25 +187,14 @@ export default function OnboardingPage() {
             <pre className="mt-2 p-3 bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-md text-[11px] font-mono whitespace-pre-wrap break-all">{csrPem}</pre>
           </details>
           <FieldGrid cols={1}>
-            <Field label="OTP" required hint={env === "sandbox" ? "Sandbox test OTP: 123456" : "From fatoora.zatca.gov.sa"}>
-              <div className="flex gap-2">
-                <input
-                  className="input font-mono flex-1"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  autoComplete="one-time-code"
-                  placeholder={env === "sandbox" ? "123456" : "Enter OTP"}
-                />
-                {env === "sandbox" && (
-                  <button
-                    type="button"
-                    className="btn btn-default whitespace-nowrap"
-                    onClick={() => setOtp("123456")}
-                  >
-                    Use test OTP
-                  </button>
-                )}
-              </div>
+            <Field label="OTP" required hint={env === "sandbox" ? "Sandbox test OTP" : "From fatoora.zatca.gov.sa, 6 digits, ~1 hour validity"}>
+              <input
+                className="input font-mono"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                autoComplete="one-time-code"
+                placeholder="123456"
+              />
             </Field>
           </FieldGrid>
           <div className="mt-4">

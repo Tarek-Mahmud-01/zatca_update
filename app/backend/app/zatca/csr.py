@@ -23,7 +23,6 @@ import base64
 from enum import Enum
 
 from cryptography import x509
-from cryptography.x509.name import _ASN1Type
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
@@ -36,14 +35,14 @@ CUSTOM_TEMPLATE_OID = x509.ObjectIdentifier("1.3.6.1.4.1.311.20.2")
 class CsrTemplate(str, Enum):
     """Microsoft cert template name embedded in the CSR (OID 1.3.6.1.4.1.311.20.2).
 
-    Verified against the SDK's openssl_temp.cnf and ZATCA's published examples:
-        sandbox    -> TSTZATCA-Code-Signing
-        simulation -> PREZATCA-Code-Signing
-        production -> ZATCA-Code-Signing
+    Empirically the ZATCA endpoints accept the production template name
+    `ZATCA-Code-Signing` for ALL environments (sandbox/simulation/production),
+    matching a working reference implementation. Keep the enum so callers
+    can still pass an env, but all values map to the same string.
     """
 
-    sandbox = "TSTZATCA-Code-Signing"
-    simulation = "PREZATCA-Code-Signing"
+    sandbox = "ZATCA-Code-Signing"
+    simulation = "ZATCA-Code-Signing"
     production = "ZATCA-Code-Signing"
 
 
@@ -92,15 +91,14 @@ def _build_san_directory(cfg: CsrConfigInput) -> x509.SubjectAlternativeName:
 
 
 def _template_extension(template: CsrTemplate) -> x509.UnrecognizedExtension:
-    """customCertExtension with the Microsoft template name as a PrintableString.
+    """customCertExtension with the Microsoft template name as a UTF8String.
 
-    Matches the SDK's openssl_temp.cnf:
-        zatcaTemplate = ASN1:PRINTABLESTRING:<TemplateName>
-
-    PrintableString tag is 0x13 followed by short-form length and ASCII bytes.
+    Verified against a working reference implementation that successfully
+    onboards with ZATCA sandbox: the bytes are 0x0c (UTF8String tag) + length
+    + ASCII bytes — NOT 0x13 (PrintableString) as some docs suggest.
     """
-    name_bytes = template.value.encode("ascii")
-    body = bytes([0x13, len(name_bytes)]) + name_bytes
+    name_bytes = template.value.encode("utf-8")
+    body = bytes([0x0c, len(name_bytes)]) + name_bytes
     return x509.UnrecognizedExtension(CUSTOM_TEMPLATE_OID, body)
 
 
@@ -111,33 +109,27 @@ def build_csr(
     *,
     pem: bool = True,
 ) -> str:
-    """Build a CSR matching the SDK's openssl_temp.cnf recipe.
+    """Build a CSR that ZATCA actually accepts.
 
-    Critical details (don't change without re-verifying against ZATCA simulation):
-      * Subject DN order: C, O, OU, CN — matches the order in ZATCA-issued
-        certs (and what BouncyCastle's BCStyle emits).
-      * Subject attributes use PrintableString encoding — verified against
-        ZATCA's issued cert. Using UTF8String (cryptography's default) makes
-        ZATCA's CA return "Invalid-CSR".
-      * keyUsage = digitalSignature, nonRepudiation, keyEncipherment
-      * basicConstraints CA:FALSE
-      * SAN with directoryName (SN, UID, title, registeredAddress,
-        businessCategory) — these stay UTF8String, also matching the
-        issued-cert encoding.
-      * customCertExtension 1.3.6.1.4.1.311.20.2 as PrintableString
+    Aligned with a working reference implementation verified against ZATCA's
+    sandbox compliance endpoint:
+
+      * Subject DN order: C, OU, O, CN.
+      * Attribute encoding: cryptography's default (UTF8String). Do NOT
+        force PrintableString — ZATCA rejects that.
+      * Only TWO extensions, in this order:
+          1. customCertExtension 1.3.6.1.4.1.311.20.2 (UTF8String value
+             "ZATCA-Code-Signing" for ALL envs)
+          2. SubjectAlternativeName (directoryName with the 5 ZATCA RDNs)
+        basicConstraints and keyUsage are NOT added — ZATCA's parser is
+        strict and the working reference omits them.
     """
-    # Force PrintableString (ASN.1 tag 0x13) on subject DN attributes — that's
-    # how BouncyCastle's BCStyle (used by the ZATCA SDK) encodes ASCII values,
-    # and what ZATCA's PKI validates against.
-    def _ps(oid, value: str) -> x509.NameAttribute:
-        return x509.NameAttribute(oid, value, _type=_ASN1Type.PrintableString)
-
     subject = x509.Name(
         [
-            _ps(NameOID.COUNTRY_NAME, cfg.country_name),
-            _ps(NameOID.ORGANIZATION_NAME, cfg.organization_name),
-            _ps(NameOID.ORGANIZATIONAL_UNIT_NAME, cfg.organization_unit_name),
-            _ps(NameOID.COMMON_NAME, cfg.common_name),
+            x509.NameAttribute(NameOID.COUNTRY_NAME, cfg.country_name),
+            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, cfg.organization_unit_name),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, cfg.organization_name),
+            x509.NameAttribute(NameOID.COMMON_NAME, cfg.common_name),
         ]
     )
 
@@ -147,25 +139,8 @@ def build_csr(
     builder = (
         x509.CertificateSigningRequestBuilder()
         .subject_name(subject)
-        .add_extension(
-            x509.BasicConstraints(ca=False, path_length=None), critical=False
-        )
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                content_commitment=True,  # = nonRepudiation
-                key_encipherment=True,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=False,
-                crl_sign=False,
-                encipher_only=False,
-                decipher_only=False,
-            ),
-            critical=False,
-        )
-        .add_extension(san_ext, critical=False)
         .add_extension(template_ext, critical=False)
+        .add_extension(san_ext, critical=False)
     )
 
     csr = builder.sign(private_key, hashes.SHA256())

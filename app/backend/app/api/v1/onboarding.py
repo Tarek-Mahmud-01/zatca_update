@@ -21,6 +21,59 @@ from app.zatca.pipeline import process_invoice
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
+def _extract_error_messages(resp) -> str:
+    """Pull the blocking errorMessages out of a ZATCA validation response.
+
+    ZATCA's body has validationResults.{errorMessages, warningMessages}.
+    Warnings (e.g. BR-KSA-F-08 about CRN) don't block clearance — the real
+    rejection reason lives in errorMessages, which the old [:500] truncation
+    was cutting off. Return a compact 'code: message' list of the errors;
+    fall back to raw text if the shape is unexpected.
+    """
+    try:
+        vr = (resp.body or {}).get("validationResults") or {}
+        errors = vr.get("errorMessages") or []
+        if errors:
+            return " | ".join(
+                f"{e.get('code', '?')}: {e.get('message', '')}".strip()
+                for e in errors
+            )[:2000]
+        # No explicit errors but still not cleared — surface warnings so the
+        # user has something actionable.
+        warnings = vr.get("warningMessages") or []
+        if warnings:
+            return "WARNINGS — " + " | ".join(
+                f"{w.get('code', '?')}: {w.get('message', '')}".strip()
+                for w in warnings
+            )[:2000]
+    except Exception:
+        pass
+    return (resp.raw_text or "")[:2000]
+
+
+def _binary_token_to_pem(token: str) -> str | None:
+    """ZATCA's compliance/production response delivers the X.509 certificate
+    AS the `binarySecurityToken` — there is no separate `certificate` field.
+
+    The token is base64-encoded twice: decoding once yields the inner base64
+    of the DER certificate. We decode to raw DER, then re-wrap as PEM so the
+    rest of the pipeline (signing, QR) has a normal certificate.
+
+    Mirrors the working reference's write_certificate_pem(). Returns None if
+    the token is empty or can't be decoded.
+    """
+    if not token:
+        return None
+    try:
+        inner = base64.b64decode(token.strip()).decode().strip()  # inner = base64(DER)
+        der = base64.b64decode(inner)                              # raw DER
+        b64 = base64.b64encode(der).decode()
+        wrapped = "\n".join(b64[i : i + 64] for i in range(0, len(b64), 64))
+        return f"-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n"
+    except Exception:
+        return None
+
+
 def _template_for(env: ZatcaEnv) -> CsrTemplate:
     return {
         ZatcaEnv.sandbox: CsrTemplate.sandbox,
@@ -126,27 +179,32 @@ async def issue_compliance_csid(
         if "Missing-OTP" in raw:
             hint = " — the OTP field was empty when submitted."
         elif "Invalid-CSR" in raw or "Invalid Request" in raw or resp.status_code == 400:
-            if env == ZatcaEnv.sandbox:
-                hint = (
-                    " — sandbox accepts only the test OTP '123456'. "
-                    "Check the OTP you entered and try again."
-                )
-            else:
-                hint = (
-                    " — most commonly the OTP is wrong/expired. "
-                    "Generate a fresh OTP at https://fatoora.zatca.gov.sa "
-                    "and try again."
-                )
+            hint = (
+                " — most commonly the OTP is wrong or expired (they're valid "
+                "for ~1 hour). Generate a fresh OTP at "
+                "https://fatoora.zatca.gov.sa for this org id and retry. "
+                "Less commonly, the org_id isn't registered with ZATCA yet."
+            )
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"zatca {resp.status_code}: {raw}{hint}",
         )
 
     body = resp.body
-    csid.binary_security_token = body.get("binarySecurityToken")
+    token = body.get("binarySecurityToken")
+    csid.binary_security_token = token
     csid.secret = body.get("secret")
-    csid.request_id = body.get("requestID") or body.get("requestId")
-    csid.certificate_pem = body.get("certificate") or body.get("Certificate")
+    # ZATCA returns requestID as an integer (e.g. 1234567890123) but the
+    # column is VARCHAR — coerce to str. None stays None.
+    raw_req_id = body.get("requestID") or body.get("requestId")
+    csid.request_id = str(raw_req_id) if raw_req_id is not None else None
+    # The certificate IS the binarySecurityToken (base64-encoded). ZATCA does
+    # not send a separate `certificate` field. Derive a PEM from the token.
+    csid.certificate_pem = (
+        body.get("certificate")
+        or body.get("Certificate")
+        or _binary_token_to_pem(token)
+    )
     csid.disposition_message = body.get("dispositionMessage")
     csid.issued_at = datetime.now(timezone.utc)
     await db.commit()
@@ -309,7 +367,7 @@ async def run_compliance_check(
             http_status=resp.status_code,
             zatca_status=zatca_status or None,
             passed=passed,
-            error=None if passed else resp.raw_text[:500],
+            error=None if passed else _extract_error_messages(resp),
         ))
 
         # Per spec, PIH advances regardless of acceptance — we sent it on the wire.
@@ -378,10 +436,18 @@ async def issue_production_csid(
         kind="production",
         private_key_pem=parent.private_key_pem,
         csr_pem=parent.csr_pem,
-        certificate_pem=body.get("certificate") or body.get("Certificate"),
+        certificate_pem=(
+            body.get("certificate")
+            or body.get("Certificate")
+            or _binary_token_to_pem(body.get("binarySecurityToken"))
+        ),
         binary_security_token=body.get("binarySecurityToken"),
         secret=body.get("secret"),
-        request_id=body.get("requestID") or body.get("requestId"),
+        request_id=(
+            str(body.get("requestID") or body.get("requestId"))
+            if (body.get("requestID") or body.get("requestId")) is not None
+            else None
+        ),
         disposition_message=body.get("dispositionMessage"),
         issued_at=datetime.now(timezone.utc),
     )

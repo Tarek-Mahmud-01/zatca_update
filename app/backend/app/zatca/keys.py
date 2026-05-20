@@ -18,9 +18,10 @@ def generate_private_key() -> ec.EllipticCurvePrivateKey:
 
 
 def serialize_private_key_pem(key: ec.EllipticCurvePrivateKey) -> str:
+    # PKCS8 format — what the working ZATCA reference implementation uses.
     return key.private_bytes(
         encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
 

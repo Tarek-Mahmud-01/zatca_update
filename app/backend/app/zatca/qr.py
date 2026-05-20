@@ -52,14 +52,24 @@ class QrFields:
 
 
 def build_tlv(fields: QrFields) -> bytes:
+    """Build the ZATCA Phase-2 TLV QR payload.
+
+    Tag encoding (verified against a working reference that passes ZATCA's
+    simplified-invoice reporting check):
+      * Tags 1-7 are STRINGS — their UTF-8 bytes. Critically, tag 6 (hash)
+        and tag 7 (signature) are the *base64 strings*, NOT the decoded bytes.
+        Decoding tag 7 to raw bytes causes INVOICE_SIGNATURE_VALUE_QRCODE_INVALID.
+      * Tags 8-9 are RAW BINARY — the public key SPKI DER and the certificate
+        signature bytes (we receive them base64-encoded, so decode once).
+    """
     buf = b""
     buf += _tlv(1, fields.seller_name.encode("utf-8"))
-    buf += _tlv(2, fields.vat_number.encode("ascii"))
-    buf += _tlv(3, fields.timestamp.encode("ascii"))
-    buf += _tlv(4, fields.invoice_total.encode("ascii"))
-    buf += _tlv(5, fields.vat_amount.encode("ascii"))
-    buf += _tlv(6, fields.invoice_hash_b64.encode("ascii"))
-    buf += _tlv(7, base64.b64decode(fields.signature_b64))
+    buf += _tlv(2, fields.vat_number.encode("utf-8"))
+    buf += _tlv(3, fields.timestamp.encode("utf-8"))
+    buf += _tlv(4, fields.invoice_total.encode("utf-8"))
+    buf += _tlv(5, fields.vat_amount.encode("utf-8"))
+    buf += _tlv(6, fields.invoice_hash_b64.encode("utf-8"))
+    buf += _tlv(7, fields.signature_b64.encode("utf-8"))
     buf += _tlv(8, base64.b64decode(fields.public_key_der_b64))
     if fields.cert_signature_b64 is not None:
         buf += _tlv(9, base64.b64decode(fields.cert_signature_b64))

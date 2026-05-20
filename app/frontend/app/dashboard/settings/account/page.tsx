@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type Me } from "../../../../lib/api-client";
-import { getToken } from "../../../../lib/token";
+import { getToken, handleAuthExpired } from "../../../../lib/token";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 
 export default function AccountSettingsPage() {
@@ -17,8 +17,9 @@ export default function AccountSettingsPage() {
   }, []);
 
   function signOut() {
-    document.cookie = "token=; path=/; max-age=0";
-    window.location.href = "/login";
+    // Goes through the shared handler so the cookie is wiped AND every
+    // other open tab gets the logout broadcast via BroadcastChannel.
+    handleAuthExpired();
   }
 
   return (

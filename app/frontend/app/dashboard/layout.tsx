@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EnvBadge } from "../../components/EnvSwitcher";
 import { HeaderActions } from "../../components/HeaderActions";
 import { NotificationFeed } from "../../components/NotificationFeed";
 import { Toaster } from "../../components/Toaster";
-import { AutoQueueTick } from "../../components/AutoQueueTick";
+import { handleAuthExpired, isTokenLive, subscribeAuthExpired } from "../../lib/token";
 
 const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
   { href: "/dashboard",                       label: "Overview" },
@@ -28,9 +28,50 @@ const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
   { href: "/dashboard/settings/account",       label: "Account",          group: "Settings" },
 ];
 
+/**
+ * Route-level auth gate — fast, no network round-trip.
+ *
+ * We trust the cookie's JWT for the upfront check by decoding its `exp`
+ * claim locally. If the token is missing or already expired we bounce to
+ * /login immediately, before any child page mounts. Otherwise we render
+ * straight away — no "Verifying session…" flash on every refresh / HMR
+ * rebuild.
+ *
+ * Server-side revocations and runtime expiry are caught by:
+ *   - the SSE stream in <NotificationFeed/> (continuous canary)
+ *   - the centralised 401 handler in `request<T>()`
+ *
+ * SSR returns `false` from isTokenLive() because document.cookie isn't
+ * available — we render the loading shell on the server, then re-check on
+ * the client. This is unavoidable when auth lives in a cookie read by JS.
+ */
+function useAuthGate(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (isTokenLive()) {
+      setReady(true);
+    } else {
+      handleAuthExpired();   // no token or `exp` already in the past
+    }
+    // Cross-tab logout: when ANY other tab signs out (or has its session
+    // killed), drop this one too. BroadcastChannel ⇒ instant, no polling.
+    return subscribeAuthExpired();
+  }, []);
+  return ready;
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
+  const authed = useAuthGate();
+
+  if (!authed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
+        <div className="text-sm text-[var(--color-fg-muted)]">Loading…</div>
+      </div>
+    );
+  }
 
   function NavLinks({ onClick }: { onClick?: () => void }) {
     const groups = new Map<string, typeof NAV[number][]>();
@@ -126,9 +167,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </main>
       </div>
 
-      {/* Single SSE connection + bottom-right toast container + queue tick */}
+      {/* Single SSE connection (drives notifications + auth health-check)
+          and the bottom-right toast container. The queue tick lives on the
+          backend arq worker — the frontend just listens for the
+          invoice.cleared/reported/etc events that fire when it runs. */}
       <NotificationFeed />
-      <AutoQueueTick />
       <Toaster />
     </div>
   );

@@ -1,8 +1,14 @@
 """TLV decoder round-trip for our QR encoder.
 
-We assert that ``build_tlv`` produces well-formed TLV records that we can decode
-back into the original fields, that lengths are correct, and that tag 9 only
-appears when ``cert_signature_b64`` is supplied (mirroring SDK behavior).
+Encoding rules verified end-to-end against ZATCA sandbox (all 12 compliance
+invoices CLEARED/REPORTED):
+  * Tags 1-7 are STRINGS — tag 6 (hash) and tag 7 (signature) are the
+    *base64 strings*, not decoded bytes.
+  * Tag 7 signature is DER-encoded ECDSA (set by the signer).
+  * Tags 8-9 are RAW BINARY (public key SPKI DER, certificate signature).
+  * Tag 9 is included whenever cert_signature_b64 is supplied; the pipeline
+    now supplies it for ALL invoice types (simplified included), because the
+    SDK reference simplified QR carries it and ZATCA rejects QRs without it.
 """
 import base64
 import dataclasses
@@ -49,7 +55,7 @@ def _fields(cert_sig: str | None) -> QrFields:
     )
 
 
-def test_tlv_round_trip_simplified() -> None:
+def test_tlv_tags_1_to_7_are_strings() -> None:
     tlv = build_tlv(_fields(cert_sig=None))
     decoded = dict(_decode_tlv(tlv))
     assert decoded[1].decode() == "Maximum Speed Tech Supply LTD"
@@ -57,16 +63,27 @@ def test_tlv_round_trip_simplified() -> None:
     assert decoded[3].decode() == "2022-08-17T17:41:08"
     assert decoded[4].decode() == "231.15"
     assert decoded[5].decode() == "30.15"
+    # Tag 6 is the base64 hash STRING, not the decoded 32-byte digest.
     assert decoded[6].decode() == "Hss2gNFjBY5OJn/5CEVZSSNUMrSf4QlCMxwsioPN6fA="
-    assert 9 not in decoded  # simplified must NOT include cert signature
 
 
-def test_tlv_round_trip_standard_includes_cert_signature() -> None:
+def test_tag7_is_base64_signature_string_not_raw_bytes() -> None:
+    """Regression: tag 7 must carry the base64 signature STRING (its UTF-8
+    bytes), not the decoded signature. Decoding it caused
+    INVOICE_SIGNATURE_VALUE_QRCODE_INVALID against ZATCA.
+    """
+    sig_b64 = base64.b64encode(b"\x30\x45\x02" + b"\x11" * 60).decode()
+    fields = dataclasses.replace(_fields(cert_sig=None), signature_b64=sig_b64)
+    decoded = dict(_decode_tlv(build_tlv(fields)))
+    assert decoded[7].decode() == sig_b64
+
+
+def test_tlv_includes_cert_signature_when_supplied() -> None:
     cert_sig = base64.b64encode(b"\xbb" * 71).decode()
     tlv = build_tlv(_fields(cert_sig=cert_sig))
     decoded = dict(_decode_tlv(tlv))
     assert 9 in decoded
-    assert decoded[9] == b"\xbb" * 71
+    assert decoded[9] == b"\xbb" * 71  # raw binary, not base64 string
 
 
 def test_qr_base64_is_decodable() -> None:

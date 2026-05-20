@@ -1,20 +1,21 @@
 """ZATCA CSR conformance tests.
 
 We don't byte-compare against the SDK (ECDSA signatures are non-deterministic), so
-we instead assert every structural requirement ZATCA's PKI cares about:
+we instead assert every structural requirement ZATCA's PKI cares about,
+verified against a working reference implementation:
 
-  * Subject DN order: C, OU, O, CN (matches SDK's openssl_temp.cnf)
+  * Subject DN order: C, OU, O, CN
   * Public key on curve secp256k1
-  * Template extension (1.3.6.1.4.1.311.20.2) as PrintableString containing the
-    correct template name per environment
-  * SAN with directoryName containing:
-      2.5.4.4   surname            (serial_number; NOT 2.5.4.5)
-      0.9.2342.19200300.100.1.1   (organization_identifier)
-      2.5.4.12  title              (invoice_type)
-      2.5.4.26  registeredAddress  (location_address)
-      2.5.4.15  businessCategory   (industry_business_category)
-  * basicConstraints CA:FALSE
-  * keyUsage = digitalSignature, nonRepudiation, keyEncipherment
+  * Exactly TWO extensions, in order:
+      1. customCertExtension 1.3.6.1.4.1.311.20.2 (UTF8String value
+         "ZATCA-Code-Signing" — same for ALL envs)
+      2. SubjectAlternativeName with directoryName containing:
+           2.5.4.4   surname            (serial_number; NOT 2.5.4.5)
+           0.9.2342.19200300.100.1.1   (organization_identifier)
+           2.5.4.12  title              (invoice_type)
+           2.5.4.26  registeredAddress  (location_address)
+           2.5.4.15  businessCategory   (industry_business_category)
+  * NO BasicConstraints, NO KeyUsage (ZATCA rejects when present)
 """
 import pytest
 from cryptography import x509
@@ -58,41 +59,47 @@ def test_public_key_is_secp256k1() -> None:
     assert isinstance(pk.curve, ec.SECP256K1)
 
 
-def test_subject_dn_order_is_C_O_OU_CN() -> None:
-    """The DER-encoded subject is C → O → OU → CN — matches the order
-    in ZATCA-issued certs (verified against Data/Input/cert.pem) and what
-    BouncyCastle's BCStyle (used by the ZATCA SDK) emits.
+def test_subject_dn_order_is_C_OU_O_CN() -> None:
+    """The DER-encoded subject is C → OU → O → CN — matches the order
+    used by the working reference implementation that successfully onboards
+    with ZATCA sandbox.
     """
     csr, _ = _build()
     oids = [a.oid.dotted_string for a in csr.subject]
     assert oids == [
         NameOID.COUNTRY_NAME.dotted_string,
-        NameOID.ORGANIZATION_NAME.dotted_string,
         NameOID.ORGANIZATIONAL_UNIT_NAME.dotted_string,
+        NameOID.ORGANIZATION_NAME.dotted_string,
         NameOID.COMMON_NAME.dotted_string,
     ]
 
 
-def test_subject_dn_attributes_are_printable_string() -> None:
-    """ZATCA's PKI rejects CSRs whose subject attributes are UTF8String —
-    verified empirically. BouncyCastle's BCStyle emits PrintableString for
-    ASCII-safe values, and ZATCA-issued certs use PrintableString too.
+def test_csr_has_only_two_extensions_template_then_san() -> None:
+    """Working ZATCA reference adds exactly two extensions: the Microsoft
+    template OID first, then SubjectAlternativeName. No BasicConstraints,
+    no KeyUsage — ZATCA's CSR parser is strict about the extension set.
     """
-    import base64
-    csr_pem = build_csr(_sample_config(), generate_private_key(), CsrTemplate.sandbox, pem=True)
-    body = "".join(
-        line for line in csr_pem.splitlines()
-        if not line.startswith("-----") and line.strip()
+    csr, _ = _build()
+    oids = [ext.oid.dotted_string for ext in csr.extensions]
+    assert oids == [TEMPLATE_OID, "2.5.29.17"], (
+        f"got extensions {oids}, expected exactly [template, SAN]"
     )
-    der = base64.b64decode(body)
-    cfg = _sample_config()
-    for value in (cfg.country_name, cfg.organization_name, cfg.organization_unit_name, cfg.common_name):
-        idx = der.find(value.encode("ascii"))
-        assert idx > 0, f"value {value!r} not found in DER"
-        # Two bytes before the value: tag, length. Tag 0x13 = PrintableString.
-        assert der[idx - 2] == 0x13, (
-            f"attribute {value!r} encoded as tag={hex(der[idx-2])}, expected "
-            f"PrintableString (0x13) — ZATCA rejects UTF8String here."
+
+
+def test_template_extension_value_is_utf8string_zatca_code_signing() -> None:
+    """Template OID 1.3.6.1.4.1.311.20.2 must carry the value 'ZATCA-Code-Signing'
+    as a UTF8String (ASN.1 tag 0x0c) — same string for ALL environments.
+    Verified against a working reference; using PrintableString or env-specific
+    names like 'TSTZATCA-Code-Signing' produces 'Invalid-CSR'.
+    """
+    for template in (CsrTemplate.sandbox, CsrTemplate.simulation, CsrTemplate.production):
+        csr, _ = _build(template)
+        ext = next(e for e in csr.extensions if e.oid.dotted_string == TEMPLATE_OID)
+        body = ext.value.value
+        assert body[0] == 0x0c, f"expected UTF8String tag 0x0c, got {hex(body[0])}"
+        name = body[2:].decode("utf-8")
+        assert name == "ZATCA-Code-Signing", (
+            f"template name must be 'ZATCA-Code-Signing' for all envs, got {name!r}"
         )
 
 
@@ -139,47 +146,14 @@ def test_san_uses_surname_oid_not_serialnumber_oid() -> None:
     )
 
 
-def test_basic_constraints_ca_false() -> None:
-    csr, _ = _build()
-    bc = csr.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value
-    assert bc.ca is False
-
-
-def test_key_usage_is_digitalsig_nonrepud_keyencipherment() -> None:
-    csr, _ = _build()
-    ku = csr.extensions.get_extension_for_oid(ExtensionOID.KEY_USAGE).value
-    assert ku.digital_signature is True
-    assert ku.content_commitment is True  # nonRepudiation
-    assert ku.key_encipherment is True
-    assert ku.data_encipherment is False
-    assert ku.key_agreement is False
-    assert ku.key_cert_sign is False
-    assert ku.crl_sign is False
-
-
-@pytest.mark.parametrize(
-    "template,expected",
-    [
-        (CsrTemplate.sandbox,    "TSTZATCA-Code-Signing"),
-        (CsrTemplate.simulation, "PREZATCA-Code-Signing"),
-        (CsrTemplate.production, "ZATCA-Code-Signing"),
-    ],
-)
-def test_template_extension_is_printablestring_with_correct_name(
-    template: CsrTemplate, expected: str
-) -> None:
-    """OID 1.3.6.1.4.1.311.20.2 must contain a PrintableString (tag 0x13)
-    whose body is the env-specific template name.
-
-    The SDK's openssl_temp.cnf is the canonical reference:
-        zatcaTemplate = ASN1:PRINTABLESTRING:<Name>
+def test_csr_omits_basic_constraints_and_key_usage() -> None:
+    """ZATCA's reference Python implementation does NOT add BasicConstraints
+    or KeyUsage to the CSR. Including them produced 'Invalid-CSR'.
     """
-    csr, _ = _build(template)
-    ext = next(e for e in csr.extensions if e.oid.dotted_string == TEMPLATE_OID)
-    raw = ext.value.value
-    assert raw[0] == 0x13, f"expected PrintableString tag 0x13, got 0x{raw[0]:02x}"
-    assert raw[1] == len(expected), "DER length byte must match expected name length"
-    assert raw[2:].decode("ascii") == expected
+    csr, _ = _build()
+    oids = [e.oid.dotted_string for e in csr.extensions]
+    assert ExtensionOID.BASIC_CONSTRAINTS.dotted_string not in oids
+    assert ExtensionOID.KEY_USAGE.dotted_string not in oids
 
 
 def test_csr_signs_with_sha256_ecdsa() -> None:

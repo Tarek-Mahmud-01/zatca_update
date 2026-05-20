@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { api, type Me } from "../lib/api-client";
-import { getToken } from "../lib/token";
+import { getToken, handleAuthExpired } from "../lib/token";
 import {
   clearAll, markAllRead, useNotifications, type Notification,
 } from "../lib/notifications";
@@ -70,8 +70,9 @@ export function HeaderActions() {
   }, [bellOpen]);
 
   function signOut() {
-    document.cookie = "token=; path=/; max-age=0; SameSite=Lax";
-    window.location.href = "/login";
+    // Centralised: wipes the cookie, broadcasts logout to every other open
+    // tab via BroadcastChannel, then redirects this tab to /login.
+    handleAuthExpired();
   }
 
   function toggleBell() {

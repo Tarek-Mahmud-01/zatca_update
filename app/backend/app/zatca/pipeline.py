@@ -59,9 +59,10 @@ def process_invoice(
         invoice_hash_b64=sign_result.invoice_hash_b64,
         signature_b64=sign_result.signature_b64,
         public_key_der_b64=public_key_der_base64(private_key),
-        cert_signature_b64=(
-            cert_signature_b64(certificate_pem) if _is_standard_doc(payload.doc_type) else None
-        ),
+        # Tag 9 (certificate signature) is present in the SDK reference QR for
+        # BOTH standard and simplified invoices — ZATCA's reporting QR check
+        # rejects simplified QRs that omit it (QRCODE_INVALID). Always include.
+        cert_signature_b64=cert_signature_b64(certificate_pem),
     )
     qr_b64 = encode_qr_base64(qr_fields)
 
