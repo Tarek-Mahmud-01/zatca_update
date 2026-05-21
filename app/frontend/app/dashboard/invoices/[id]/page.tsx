@@ -7,6 +7,7 @@ import { api, type InvoiceDetail } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { useRouter } from "next/navigation";
 import { Banner, Card, Field, FieldGrid, PageHeader, StatusDot, Tabs } from "../../../../components/ui";
+import { pushNotification } from "../../../../lib/notifications";
 
 type TabId = "overview" | "parties" | "lines" | "submissions" | "qr" | "xml" | "error";
 
@@ -62,6 +63,7 @@ export default function InvoiceDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("overview");
   const [amendOpen, setAmendOpen] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     const token = getToken();
@@ -120,7 +122,28 @@ export default function InvoiceDetailPage() {
         }
         description={<span>{inv.doc_type} · ICV <span className="font-mono">{inv.icv}</span></span>}
         actions={
-          (inv.status === "cleared" || inv.status === "reported") &&
+          (inv.status === "rejected" || inv.status === "failed_pending_review") ? (
+            <button
+              className="btn btn-primary"
+              disabled={retrying}
+              onClick={async () => {
+                const token = getToken();
+                if (!token) return;
+                setRetrying(true);
+                try {
+                  await api.retryInvoice(token, inv.id);
+                  // Backend pushes the status change via SSE — NotificationFeed
+                  // shows the toast. We just refresh this page's data.
+                  window.location.reload();
+                } catch (e) {
+                  // Local failure (network) — backend never got a chance to signal.
+                  pushNotification({ tone: "danger", title: "Retry failed", body: String(e) });
+                } finally { setRetrying(false); }
+              }}
+            >
+              {retrying ? "Retrying…" : "Retry (re-sign + resubmit)"}
+            </button>
+          ) : (inv.status === "cleared" || inv.status === "reported") &&
           !inv.doc_type.includes("_note") ? (
             <button className="btn btn-primary" onClick={() => setAmendOpen(true)}>
               Amend (issue credit / debit note)

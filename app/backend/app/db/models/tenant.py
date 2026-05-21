@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -78,6 +78,18 @@ class TenantUser(UUIDPKMixin, TimestampMixin, Base):
         PG_UUID(as_uuid=True),
         ForeignKey("tenant_branches.id", ondelete="SET NULL"),
         nullable=True,
+    )
+
+    # Per-user UI preferences. Authoritative copy lives here — the frontend
+    # reads via /settings/user-preferences and never relies on localStorage.
+    page_size: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=25, server_default="25"
+    )
+    reported_daily_quota: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=500, server_default="500"
+    )
+    clearance_daily_quota: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=100, server_default="100"
     )
 
     tenant: Mapped[Tenant] = relationship(back_populates="users", lazy="raise")

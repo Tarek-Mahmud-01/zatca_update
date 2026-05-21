@@ -11,39 +11,17 @@ clients see the live update.
 """
 from __future__ import annotations
 
-import base64
 from datetime import datetime, timezone
 from uuid import UUID
 
 from arq.connections import RedisSettings
 from arq.cron import cron
-from sqlalchemy import desc, select
+from sqlalchemy import select
 
-from app.config import ZatcaEnv, get_settings
-from app.db.models import Csid, Invoice, Submission, Tenant
+from app.config import get_settings
+from app.db.models import Invoice, Tenant
 from app.db.session import SessionLocal
-from app.events import publish
-from app.zatca.client import ZatcaClient
-
-REPORTING_FAMILY = {
-    "simplified_invoice",
-    "simplified_credit_note",
-    "simplified_debit_note",
-    "nominal_supply_invoice",
-    "advance_payment_invoice",
-}
-
-
-async def _emit(inv: Invoice, event_type: str, *, error: str | None = None) -> None:
-    payload = {
-        "invoice_id": str(inv.id),
-        "icv": inv.icv,
-        "doc_type": inv.doc_type,
-        "status": inv.status,
-    }
-    if error is not None:
-        payload["error"] = error[:500]
-    await publish(inv.tenant_id, event_type, **payload)
+from app.zatca.submitter import REPORTING_FAMILY, submit_invoice_to_zatca  # noqa: F401
 
 
 async def submit_invoice_job(ctx: dict, invoice_id: str) -> str:
@@ -52,91 +30,13 @@ async def submit_invoice_job(ctx: dict, invoice_id: str) -> str:
         inv = await db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
         if inv is None:
             return "missing"
-        if inv.status not in {"queued", "retrying"}:
-            return f"skip:{inv.status}"
-
-        csid = await db.scalar(
-            select(Csid)
-            .where(
-                Csid.tenant_id == inv.tenant_id,
-                Csid.env == inv.env,
-                Csid.kind == "production",
-                Csid.revoked_at.is_(None),
-            )
-            .order_by(desc(Csid.issued_at))
-        )
-        if csid is None:
-            inv.status = "failed_no_csid"
-            inv.last_error = "no production CSID available"
-            await db.commit()
-            await _emit(inv, "invoice.failed", error=inv.last_error)
-            return "no_csid"
-
-        # Dev-cert invoices can't be validated by ZATCA — skip the network call.
-        if csid.is_dev:
-            inv.status = "local_only"
-            inv.last_error = (
-                "Signed locally with a development certificate. Complete ZATCA "
-                "onboarding (CSR → CCSID → PCSID) to submit real invoices."
-            )
-            inv.submitted_at = datetime.now(timezone.utc)
-            await db.commit()
-            await _emit(inv, "invoice.local_only", error=inv.last_error)
-            return "local_only"
-
-        client = ZatcaClient(ZatcaEnv(inv.env))
-        invoice_b64 = base64.b64encode(inv.signed_xml.encode()).decode()
-        kind = "reporting" if inv.doc_type in REPORTING_FAMILY else "clearance"
-        submit_fn = client.submit_reporting if kind == "reporting" else client.submit_clearance
-
-        resp = await submit_fn(
-            binary_security_token=csid.binary_security_token or "",
-            secret=csid.secret or "",
-            invoice_b64=invoice_b64,
-            invoice_hash=inv.invoice_hash or "",
-            uuid=str(inv.uuid),
-        )
-
-        db.add(Submission(
-            invoice_id=inv.id,
-            env=inv.env,
-            kind=kind,
-            request_payload={"invoice_hash": inv.invoice_hash, "uuid": str(inv.uuid)},
-            response_payload=resp.body,
-            http_status=resp.status_code,
-            zatca_status=str(resp.body.get("status") or resp.body.get("reportingStatus") or ""),
-            attempt=int(ctx.get("job_try", 1)),
-            submitted_at=datetime.now(timezone.utc),
-        ))
-
-        if 200 <= resp.status_code < 300:
-            inv.status = "cleared" if kind == "clearance" else "reported"
-            if kind == "clearance":
-                cleared = resp.body.get("clearedInvoice")
-                if cleared:
-                    inv.cleared_xml = base64.b64decode(cleared).decode("utf-8", errors="replace")
-            inv.submitted_at = datetime.now(timezone.utc)
-            await db.commit()
-            await _emit(inv, f"invoice.{inv.status}")
-            return "ok"
-
-        if 400 <= resp.status_code < 500:
-            inv.status = "rejected"
-            inv.last_error = resp.raw_text[:2000]
-            await db.commit()
-            await _emit(inv, "invoice.rejected", error=inv.last_error)
-            return "rejected"
-
         attempt = int(ctx.get("job_try", 1))
-        if attempt >= 5:
-            inv.status = "failed_pending_review"
-        else:
-            inv.status = "retrying"
-        inv.last_error = resp.raw_text[:2000]
+        outcome = await submit_invoice_to_zatca(db, inv, attempt=attempt, max_attempts=5)
         await db.commit()
-        await _emit(inv, "invoice.retrying" if inv.status == "retrying" else "invoice.failed",
-                    error=inv.last_error)
-        raise RuntimeError(f"zatca_5xx_{resp.status_code}")
+        if outcome == "retrying" and inv.status == "retrying":
+            # Re-raise so arq schedules a retry with backoff.
+            raise RuntimeError(f"zatca_5xx_retry_{inv.icv}")
+        return outcome
 
 
 async def submit_queue_tick(ctx: dict) -> dict:

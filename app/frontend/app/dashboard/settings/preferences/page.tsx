@@ -8,7 +8,7 @@ import {
 } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import {
-  DEFAULT_PREFERENCES, loadPreferences, savePreferences, type Preferences,
+  DEFAULT_PREFERENCES, fetchPreferences, type Preferences,
 } from "../../../../lib/preferences";
 import { Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { pushNotification } from "../../../../lib/notifications";
@@ -51,7 +51,7 @@ export default function PreferencesPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    setPrefs(loadPreferences());
+    fetchPreferences().then(setPrefs).catch(() => setPrefs(DEFAULT_PREFERENCES));
     api.getTenantSettings(token).then((s) => {
       // Defensive: an older backend (pre-0006) may omit the new fields.
       const normalized: TenantSettings = {
@@ -156,10 +156,26 @@ export default function PreferencesPage() {
     }
   }
 
-  function saveDisplay(e: React.FormEvent) {
+  async function saveDisplay(e: React.FormEvent) {
     e.preventDefault();
-    savePreferences(prefs);
-    pushNotification({ tone: "success", title: "Display preferences saved" });
+    const token = getToken();
+    if (!token) return;
+    try {
+      const res = await api.putUserPreferences(token, {
+        page_size: prefs.pageSize,
+        reported_daily_quota: prefs.reportedDailyQuota,
+        clearance_daily_quota: prefs.clearanceDailyQuota,
+      });
+      setPrefs({
+        pageSize: res.page_size,
+        reportedDailyQuota: res.reported_daily_quota,
+        clearanceDailyQuota: res.clearance_daily_quota,
+        updatedAt: res.updated_at,
+      });
+      pushNotification({ tone: "success", title: "Display preferences saved" });
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Save failed", body: String(e) });
+    }
   }
 
   return (

@@ -101,18 +101,35 @@ async def _take_chain_lock(db, tenant_id: UUID, env: str) -> tuple[int, str]:
 
 
 async def _resolve_csid(db, tenant_id: UUID, env: str) -> Csid:
+    """Pick the CSID to sign + authenticate invoices with for the given env.
+
+    ZATCA's sandbox ``/production/csids`` endpoint returns a CANNED test
+    certificate (CN=TST-886431145-…) tied to a key only ZATCA holds — it's
+    NOT a cert for our CSR's key. Signing with our key + that cert produces
+    cert/key mismatch errors (publicKey_QRCODE_INVALID, certificate-hashing,
+    etc.) when submitted to sandbox.
+
+    In sandbox we therefore use the **compliance CSID** (whose cert WAS
+    issued for our key) and submit to ``/compliance/invoices``. In
+    simulation/production we use the real production CSID and submit to
+    the live ``/invoices/...`` endpoints.
+    """
+    target_kind = "compliance" if env == "sandbox" else "production"
     csid = await db.scalar(
         select(Csid)
         .where(
             Csid.tenant_id == tenant_id,
             Csid.env == env,
-            Csid.kind == "production",
+            Csid.kind == target_kind,
             Csid.revoked_at.is_(None),
         )
         .order_by(desc(Csid.issued_at))
     )
     if csid is None or not csid.certificate_pem:
-        raise HTTPException(status.HTTP_412_PRECONDITION_FAILED, "no_production_csid")
+        raise HTTPException(
+            status.HTTP_412_PRECONDITION_FAILED,
+            f"no_{target_kind}_csid — complete onboarding for {env}",
+        )
     return csid
 
 
@@ -139,41 +156,23 @@ async def _try_enqueue_arq(invoice_id: UUID) -> bool:
 
 
 async def _advance_inline(db, tenant_id: UUID, inv: Invoice) -> None:
-    """Move a queued invoice to its terminal state directly in the request
-    handler. Used when arq isn't available — keeps the demo flow moving so
-    invoices don't get stuck in 'queued' forever.
+    """Inline fallback for when the arq worker (Redis-backed queue) isn't
+    reachable. Runs the SAME real-ZATCA submission as the worker — there is
+    no separate "fake-complete" path anymore.
 
-    Dev-cert invoices are marked ``local_only`` so the UI shows them as
-    "signed but never sent to ZATCA" instead of falsely claiming cleared.
+    The four user actions converge here when arq is down:
+      1. Immediate submit  →  _enqueue → arq tried → inline fallback
+      2. Manual "Release now" on a row  →  same path
+      3. Manual "Process queue now"     →  same path (one row at a time)
+      4. Scheduled tick (arq cron only) →  arq path; not inline
 
-    For production with a real arq worker + Redis + reachable ZATCA, this path
-    is skipped (the arq job handles the real submission instead).
+    Dev-cert tenants short-circuit inside ``submit_invoice_to_zatca`` and end
+    up with status ``local_only`` — no spurious "reported" claim.
     """
+    from app.zatca.submitter import submit_invoice_to_zatca
     if inv.status not in {"queued", "retrying"}:
         return
-    csid = await db.scalar(
-        select(Csid)
-        .where(
-            Csid.tenant_id == inv.tenant_id, Csid.env == inv.env,
-            Csid.kind == "production", Csid.revoked_at.is_(None),
-        )
-        .order_by(desc(Csid.issued_at))
-    )
-    if csid is not None and csid.is_dev:
-        inv.status = "local_only"
-        inv.last_error = (
-            "Signed locally with a development certificate. Complete ZATCA "
-            "onboarding (CSR → CCSID → PCSID) to submit real invoices."
-        )
-    else:
-        is_simplified = inv.doc_type in REPORTING_FAMILY
-        inv.status = "reported" if is_simplified else "cleared"
-    inv.submitted_at = datetime.now(timezone.utc)
-    await publish(
-        tenant_id, f"invoice.{inv.status}",
-        invoice_id=str(inv.id), icv=inv.icv,
-        doc_type=inv.doc_type, status=inv.status,
-    )
+    await submit_invoice_to_zatca(db, inv)
 
 
 async def _enqueue(invoice_id: UUID) -> None:
@@ -714,6 +713,84 @@ async def release_invoice(
     await db.commit()
     await db.refresh(inv)
     return ReleaseInvoiceResponse(id=inv.id, status=inv.status, submit_mode="inline")
+
+
+# ---------------------------------------------------------------------------
+# Retry — rework a rejected invoice with the CURRENT production CSID.
+# ---------------------------------------------------------------------------
+
+
+class RetryInvoiceResponse(BaseModel):
+    id: UUID
+    status: str
+    icv: int
+    last_error: str | None
+    resigned: bool  # True if we rebuilt + re-signed before resubmitting
+
+
+@router.post("/{invoice_id}/retry", response_model=RetryInvoiceResponse)
+async def retry_rejected_invoice(
+    invoice_id: UUID, user: CurrentUserDep, db: DbSession,
+) -> RetryInvoiceResponse:
+    """Re-sign a rejected/failed invoice with the latest production CSID and
+    resubmit it. The common failure mode after a PCSID renewal is that the
+    invoice's signed_xml has the OLD cert embedded but the auth header sends
+    the NEW token — ZATCA returns publicKey/cert-hashing/signed-properties
+    errors. Re-signing with the fresh cert+key fixes that class of error.
+
+    Errors that come from the invoice content itself (wrong VAT, bad line
+    math, etc.) won't be fixed by re-signing — those need a new invoice with
+    corrected data.
+    """
+    inv = await db.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id, Invoice.tenant_id == user.tenant_id,
+        )
+    )
+    if inv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invoice_not_found")
+    if inv.status not in {"rejected", "failed_pending_review"}:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"not_retryable (current: {inv.status})",
+        )
+    if not inv.payload_json:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "missing_payload — cannot re-sign",
+        )
+
+    # Re-sign with the CURRENT production CSID — handles renewals.
+    csid = await _resolve_csid(db, user.tenant_id, inv.env)
+
+    from pydantic import TypeAdapter
+    from app.zatca.ubl_builder import InvoicePayload as _IP
+    payload = TypeAdapter(_IP).validate_python(inv.payload_json)
+    # Keep the same ICV + UUID so PIH chain integrity is preserved. ZATCA
+    # treats this as a re-submission of the same logical invoice.
+    bound = payload.model_copy(update={"icv": inv.icv, "pih_b64": payload.pih_b64})
+    processed = process_invoice(
+        bound,
+        private_key_pem=csid.private_key_pem,
+        certificate_pem=csid.certificate_pem,
+    )
+    inv.signed_xml = processed.signed_xml.decode()
+    inv.invoice_hash = processed.invoice_hash_b64
+    inv.qr_base64 = processed.qr_b64
+    inv.signed_at = datetime.now(timezone.utc)
+    inv.last_error = None
+    inv.status = "queued"  # submit_invoice_to_zatca only acts on queued/retrying
+    await db.flush()
+
+    await _advance_inline(db, user.tenant_id, inv)
+    await db.commit()
+    await db.refresh(inv)
+    return RetryInvoiceResponse(
+        id=inv.id,
+        status=inv.status,
+        icv=inv.icv,
+        last_error=inv.last_error,
+        resigned=True,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,13 +12,26 @@ from app.api.v1 import onboarding as onboarding_router
 from app.api.v1 import settings as settings_router
 from app.api.v1 import tenant_users as tenant_users_router
 from app.config import get_settings
+from app.workers.inproc_tick import run_forever as run_inproc_tick
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    # In-process queue scheduler: ticks every minute and drains tenants
+    # whose schedule matches. Replaces the need for a separate arq worker
+    # in single-server / no-Redis setups.
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(run_inproc_tick(stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except asyncio.TimeoutError:
+            task.cancel()
 
 
 app = FastAPI(

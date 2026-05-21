@@ -37,6 +37,19 @@ export interface TenantUser {
 
 export type QueueScheduleMode = "times" | "interval";
 
+export interface UserPreferences {
+  page_size: 10 | 25 | 50 | 100;
+  reported_daily_quota: number;
+  clearance_daily_quota: number;
+  updated_at: string;  // ISO timestamp — for cache invalidation / change detection
+}
+
+export interface UserPreferencesUpdate {
+  page_size: 10 | 25 | 50 | 100;
+  reported_daily_quota: number;
+  clearance_daily_quota: number;
+}
+
 export interface BusinessSettings {
   tenant_id: string;
   name: string;
@@ -132,6 +145,20 @@ export interface ComplianceResponse {
 export interface ProductionResponse {
   csid_id: string;
   issued_at: string;
+}
+
+export interface RenewalResponse {
+  csid_id: string;
+  issued_at: string;
+  replaced_csid_id: string;
+}
+
+export interface RetryInvoiceResult {
+  id: string;
+  status: string;
+  icv: number;
+  last_error: string | null;
+  resigned: boolean;
 }
 
 export interface ComplianceCheckItem {
@@ -386,6 +413,17 @@ export const api = {
     });
   },
 
+  async renewProductionCsid(
+    token: string,
+    body: { env: "sandbox" | "simulation" | "production"; otp: string },
+  ): Promise<RenewalResponse> {
+    return request("/api/v1/onboarding/renew", {
+      method: "POST",
+      body: JSON.stringify(body),
+      token,
+    });
+  },
+
   async submitInvoice(token: string, body: unknown, idempotencyKey?: string): Promise<SubmitInvoiceResponse> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
@@ -588,6 +626,18 @@ export const api = {
     if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}: ${await res.text()}`);
   },
 
+  // ---- Per-user UI preferences (page size, soft daily quotas) ----
+  // Source of truth lives on the backend (`tenant_users` row scoped to user_id).
+  // Frontend NEVER persists these in localStorage.
+  getUserPreferences(token: string) {
+    return request<UserPreferences>("/api/v1/settings/user-preferences", { token });
+  },
+  putUserPreferences(token: string, body: Partial<UserPreferencesUpdate>) {
+    return request<UserPreferences>("/api/v1/settings/user-preferences", {
+      method: "PUT", body: JSON.stringify(body), token,
+    });
+  },
+
   // ---- Tenant queue settings ----
   getTenantSettings(token: string) {
     return request<TenantSettings>("/api/v1/settings/tenant", { token });
@@ -620,6 +670,12 @@ export const api = {
 
   releaseInvoice(token: string, id: string) {
     return request<ReleaseInvoiceResult>(`/api/v1/invoices/${id}/release`, {
+      method: "POST", token,
+    });
+  },
+
+  retryInvoice(token: string, id: string) {
+    return request<RetryInvoiceResult>(`/api/v1/invoices/${id}/retry`, {
       method: "POST", token,
     });
   },

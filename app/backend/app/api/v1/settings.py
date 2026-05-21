@@ -29,6 +29,7 @@ from app.db.models import (
     TenantBranch,
     TenantCurrency,
     TenantOrganization,
+    TenantUser,
 )
 from app.db.models.tenant import DEFAULT_QUEUE_SCHEDULE_TIMES
 from app.deps import CurrentUserDep, DbSession
@@ -676,3 +677,84 @@ async def _make_only_default(db, tenant_id: UUID, model, keep_id: UUID) -> None:
     await db.execute(
         update(model).where(model.id == keep_id).values(is_default=True)
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-user UI preferences (page size, soft daily quotas).
+#
+# Authoritative copy lives in the DB on `tenant_users` so:
+#   - changes by user A never overwrite user B's prefs (scoped to user_id),
+#   - multiple browsers / devices see the same values,
+#   - no stale localStorage cache can drift from the truth.
+#
+# The frontend reads via GET and writes via PUT — never localStorage.
+# ---------------------------------------------------------------------------
+
+_PAGE_SIZE_CHOICES = {10, 25, 50, 100}
+
+
+class UserPreferencesOut(BaseModel):
+    page_size: int
+    reported_daily_quota: int
+    clearance_daily_quota: int
+    updated_at: str  # ISO timestamp — clients can use for cache-busting / sync
+
+
+class UserPreferencesIn(BaseModel):
+    page_size: int | None = Field(default=None)
+    reported_daily_quota: int | None = Field(default=None, ge=0)
+    clearance_daily_quota: int | None = Field(default=None, ge=0)
+
+    @field_validator("page_size")
+    @classmethod
+    def _check_page_size(cls, v: int | None) -> int | None:
+        if v is not None and v not in _PAGE_SIZE_CHOICES:
+            raise ValueError(f"page_size must be one of {sorted(_PAGE_SIZE_CHOICES)}")
+        return v
+
+
+def _user_prefs_out(row: TenantUser) -> UserPreferencesOut:
+    return UserPreferencesOut(
+        page_size=row.page_size,
+        reported_daily_quota=row.reported_daily_quota,
+        clearance_daily_quota=row.clearance_daily_quota,
+        updated_at=row.updated_at.isoformat() if row.updated_at else "",
+    )
+
+
+@router.get("/user-preferences", response_model=UserPreferencesOut)
+async def get_user_preferences(
+    user: CurrentUserDep, db: DbSession
+) -> UserPreferencesOut:
+    row = await db.scalar(
+        select(TenantUser).where(TenantUser.id == user.user_id)
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user_not_found")
+    return _user_prefs_out(row)
+
+
+@router.put("/user-preferences", response_model=UserPreferencesOut)
+async def update_user_preferences(
+    body: UserPreferencesIn, user: CurrentUserDep, db: DbSession
+) -> UserPreferencesOut:
+    """Partial update — only fields explicitly sent are touched. The row is
+    scoped to (user_id, tenant_id) so two users in the same tenant can't
+    overwrite each other.
+    """
+    row = await db.scalar(
+        select(TenantUser).where(
+            TenantUser.id == user.user_id, TenantUser.tenant_id == user.tenant_id,
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user_not_found")
+    if body.page_size is not None:
+        row.page_size = body.page_size
+    if body.reported_daily_quota is not None:
+        row.reported_daily_quota = body.reported_daily_quota
+    if body.clearance_daily_quota is not None:
+        row.clearance_daily_quota = body.clearance_daily_quota
+    await db.commit()
+    await db.refresh(row)
+    return _user_prefs_out(row)

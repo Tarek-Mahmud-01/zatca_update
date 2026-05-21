@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   api,
   type BusinessSettings,
@@ -173,6 +173,48 @@ export default function NewInvoicePage() {
       });
     }).catch(() => { /* leave selectors empty — UI shows "loading…" */ });
   }, []);
+
+  // ------ "Edit & resubmit" from a rejected invoice ------
+  // The list page's row-action menu links here with ?from=<id>. We fetch the
+  // source invoice and pre-fill the form so the user can correct whatever
+  // got it rejected and submit fresh (new ICV, new UUID). Original stays
+  // rejected for audit; this creates a new invoice document.
+  const searchParams = useSearchParams();
+  const fromId = searchParams.get("from");
+  useEffect(() => {
+    if (!fromId) return;
+    const token = getToken();
+    if (!token) return;
+    api.getInvoice(token, fromId).then((src) => {
+      const p = (src.payload_json ?? {}) as Record<string, unknown>;
+      if (typeof p.doc_type === "string") setDocType(p.doc_type as DocType);
+      if (typeof p.invoice_number === "string") {
+        setInvoiceNumber(`${p.invoice_number}-FIX`);
+      }
+      if (typeof p.issue_date === "string") setIssueDate(p.issue_date);
+      if (typeof p.payment_means_code === "string") setPaymentMethod(p.payment_means_code);
+      const lns = Array.isArray(p.lines) ? (p.lines as Array<Record<string, unknown>>) : [];
+      if (lns.length > 0) {
+        setLines(lns.map((l, i) => ({
+          id: String(l.id ?? i + 1),
+          product_id: "",
+          sku: "",
+          name: String(l.name ?? `Item ${i + 1}`),
+          quantity: String(l.quantity ?? "1"),
+          unit_code: String(l.unit_code ?? "PCE"),
+          unit_price: String(l.unit_price ?? "0.00"),
+          vat_code: ((l.tax_category as LineForm["vat_code"]) ?? "S"),
+          vat_percent: String(l.tax_percent ?? "15"),
+          discount_amount: String(l.discount_amount ?? "0"),
+        })));
+      }
+      pushNotification({
+        tone: "info",
+        title: "Pre-filled from rejected invoice",
+        body: `Edit and resubmit. Original ICV ${src.icv} stays rejected for audit.`,
+      });
+    }).catch(() => {/* silent — user can still create from scratch */});
+  }, [fromId]);
 
   // Apply user's default branch as soon as both /me and the branch list are loaded.
   useEffect(() => {

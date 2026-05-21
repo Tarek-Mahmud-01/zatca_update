@@ -70,11 +70,14 @@ class ZatcaClient:
         return ZatcaResponse(status_code=resp.status_code, body=body, raw_text=resp.text)
 
     async def _patch(
-        self, path: str, *, json: dict, auth: str
+        self, path: str, *, json: dict, auth: str, extra_headers: dict[str, str] | None = None
     ) -> ZatcaResponse:
         url = f"{self._base_url}{path}"
+        headers = self._headers(auth)
+        if extra_headers:
+            headers.update(extra_headers)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.patch(url, json=json, headers=self._headers(auth))
+            resp = await client.patch(url, json=json, headers=headers)
         try:
             body = resp.json() if resp.content else {}
         except ValueError:
@@ -120,10 +123,14 @@ class ZatcaClient:
     async def renew_production_csid(
         self, *, binary_security_token: str, secret: str, otp: str, csr_pem: str
     ) -> ZatcaResponse:
+        # Renewal: authenticate with the EXISTING production CSID's
+        # token+secret, supply a fresh OTP header and a NEW CSR. ZATCA returns
+        # a new production binarySecurityToken + secret.
         return await self._patch(
             "/production/csids",
             json={"csr": base64.b64encode(csr_pem.encode()).decode()},
             auth=self._basic_auth(binary_security_token, secret),
+            extra_headers={"OTP": otp},
         )
 
     # ---- live submission ------------------------------------------------

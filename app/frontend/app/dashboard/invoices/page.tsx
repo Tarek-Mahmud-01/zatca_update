@@ -145,15 +145,28 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     try {
-      const res = await api.releaseInvoice(token, id);
-      pushNotification({
-        tone: "success",
-        title: "Invoice released",
-        body: `Status: ${res.status}.`,
-      });
+      await api.releaseInvoice(token, id);
+      // Backend emits invoice.{cleared,reported,rejected,...} via SSE. Skip
+      // the local toast — let the signaler be the single source.
       reload();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Release failed", body: String(e) });
+    }
+  }
+
+  async function retryRejected(id: string) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api.retryInvoice(token, id);
+      // No toast here — the backend's `submit_invoice_to_zatca` publishes an
+      // invoice.rejected/reported/cleared event via the SSE signaler, which
+      // NotificationFeed picks up and surfaces. Single source of truth.
+      reload();
+    } catch (e) {
+      // Only show a toast for client-side failures the backend can't signal
+      // (e.g. network error before the request reached the server).
+      pushNotification({ tone: "danger", title: "Retry failed", body: String(e) });
     }
   }
 
@@ -161,12 +174,9 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     try {
-      const res = await api.promoteDraft(token, id, { submit_now });
-      pushNotification({
-        tone: "success",
-        title: submit_now ? "Draft submitted" : "Draft moved to queue",
-        body: `Status: ${res.status}.`,
-      });
+      await api.promoteDraft(token, id, { submit_now });
+      // Backend signals invoice.queued / .reported / .cleared via SSE. No
+      // local toast — single signal source.
       reload();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Promote failed", body: String(e) });
@@ -286,7 +296,7 @@ export default function InvoicesPage() {
                     </td>
                     <td data-label="Total" className="md:text-right tabular-nums">{r.payable_amount ?? "—"}</td>
                     <td data-label="Actions" className="md:text-right">
-                      <RowActions item={r} onRelease={releaseOne} onPromote={promoteDraft} />
+                      <RowActions item={r} onRelease={releaseOne} onPromote={promoteDraft} onRetry={retryRejected} />
                     </td>
                   </tr>
                 ))}
@@ -312,11 +322,12 @@ function formatDDMMYYYY(iso: string): string {
 
 /* Row actions: ⋮ menu instead of a strip of buttons */
 function RowActions({
-  item, onRelease, onPromote,
+  item, onRelease, onPromote, onRetry,
 }: {
   item: InvoiceListItem;
   onRelease: (id: string) => void;
   onPromote: (id: string, submit_now: boolean) => void;
+  onRetry: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -330,6 +341,7 @@ function RowActions({
 
   const canEdit = (item.status === "cleared" || item.status === "reported") && !item.doc_type.includes("_note");
   const canRelease = item.status === "queued" || item.status === "retrying";
+  const canRetry = item.status === "rejected" || item.status === "failed_pending_review";
   const isDraft = item.status === "draft";
 
   return (
@@ -381,6 +393,24 @@ function RowActions({
             >
               Release now → submit
             </button>
+          )}
+          {canRetry && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onRetry(item.id); }}
+                className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+              >
+                Retry (re-sign + resubmit)
+              </button>
+              <Link
+                href={`/dashboard/invoices/new?from=${item.id}`}
+                onClick={() => setOpen(false)}
+                className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+              >
+                Edit & resubmit (new invoice)
+              </Link>
+            </>
           )}
           {canEdit && (
             <Link

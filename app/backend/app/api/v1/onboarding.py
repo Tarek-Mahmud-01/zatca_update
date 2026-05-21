@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 from app.config import ZatcaEnv
 from app.db.models import Csid, CsrConfig, Tenant
@@ -456,3 +456,103 @@ async def issue_production_csid(
     await db.refresh(prod)
 
     return ProductionResponse(csid_id=prod.id, issued_at=prod.issued_at or datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# 5. Production CSID renewal (PATCH /production/csids)
+# ---------------------------------------------------------------------------
+
+
+class RenewalRequest(BaseModel):
+    env: ZatcaEnv
+    otp: str
+
+
+class RenewalResponse(BaseModel):
+    csid_id: UUID
+    issued_at: datetime
+    replaced_csid_id: UUID
+
+
+@router.post("/renew", response_model=RenewalResponse)
+async def renew_production_csid(
+    req: RenewalRequest, user: CurrentUserDep, db: DbSession
+) -> RenewalResponse:
+    """Renew an existing production CSID before it expires.
+
+    Per the ZATCA Developer Portal manual (§2.3.10.4):
+      * Authenticate with the CURRENT production CSID's binarySecurityToken
+        (username) + secret (password).
+      * Supply a fresh OTP and the CSR.
+      * PATCH /production/csids → returns a new production CSID.
+
+    We REUSE the existing private key + CSR from the active production CSID
+    — no fresh keypair, no fresh CSR build. ZATCA accepts the same CSR and
+    issues a new certificate with fresh serial/validity for the same key. The
+    new token+secret is stored as a new Csid row and the old one is revoked
+    so invoice submission picks up the renewed credentials immediately.
+    """
+    current = await db.scalar(
+        select(Csid)
+        .where(
+            Csid.tenant_id == user.tenant_id,
+            Csid.env == req.env.value,
+            Csid.kind == "production",
+            Csid.revoked_at.is_(None),
+        )
+        .order_by(desc(Csid.issued_at))
+    )
+    if current is None or not current.binary_security_token or not current.secret:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no_active_production_csid")
+    if not current.csr_pem or not current.private_key_pem:
+        raise HTTPException(status.HTTP_409_CONFLICT, "active_csid_missing_csr_or_key")
+
+    # Reuse the EXISTING CSR + private key — no regeneration. Renewal here
+    # is purely about getting a fresh production token+secret (and the cert
+    # with extended validity) for the same key pair, not rotating it. ZATCA
+    # accepts the same CSR; the issued cert will have a new serial + dates.
+    client = ZatcaClient(req.env)
+    resp = await client.renew_production_csid(
+        binary_security_token=current.binary_security_token,
+        secret=current.secret,
+        otp=req.otp,
+        csr_pem=current.csr_pem,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"zatca {resp.status_code}: {resp.raw_text[:300]}",
+        )
+
+    body = resp.body
+    token = body.get("binarySecurityToken")
+    renewed = Csid(
+        tenant_id=user.tenant_id,
+        env=req.env.value,
+        kind="production",
+        private_key_pem=current.private_key_pem,
+        csr_pem=current.csr_pem,
+        certificate_pem=(
+            body.get("certificate") or body.get("Certificate") or _binary_token_to_pem(token)
+        ),
+        binary_security_token=token,
+        secret=body.get("secret"),
+        request_id=(
+            str(body.get("requestID") or body.get("requestId"))
+            if (body.get("requestID") or body.get("requestId")) is not None
+            else None
+        ),
+        disposition_message=body.get("dispositionMessage"),
+        issued_at=datetime.now(timezone.utc),
+    )
+    db.add(renewed)
+    # Revoke the old CSID so invoice submission picks the renewed one.
+    current.revoked_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(renewed)
+
+    return RenewalResponse(
+        csid_id=renewed.id,
+        issued_at=renewed.issued_at or datetime.now(timezone.utc),
+        replaced_csid_id=current.id,
+    )

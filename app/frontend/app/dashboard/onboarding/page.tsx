@@ -13,13 +13,14 @@ const INVOICE_TYPE_PRESETS = [
   { value: "0100", label: "0100 — Simplified only",        explain: "B2C only (reporting). Six demo invoices." },
 ];
 
-type Step = "1" | "2" | "3" | "4" | "5";
+type Step = "1" | "2" | "3" | "4" | "5" | "6";
 const STEPS: ReadonlyArray<{ id: Step; label: string }> = [
   { id: "1", label: "CSR" },
   { id: "2", label: "Compliance CSID" },
   { id: "3", label: "Demo invoices" },
   { id: "4", label: "Production CSID" },
   { id: "5", label: "Done" },
+  { id: "6", label: "Renew" },
 ];
 
 export default function OnboardingPage() {
@@ -108,18 +109,15 @@ export default function OnboardingPage() {
       <Tabs<Step>
         value={step}
         onChange={(s) => {
-          // Allow stepping back to any earlier (or current) step. Forward
-          // steps stay disabled — they're gated on the previous one completing.
-          if (Number(s) <= Number(step)) {
-            setStep(s);
-            setError(null);
-          }
+          // Every tab is clickable — the user owns their flow. They might
+          // want to jump straight to step 5 to renew an existing PCSID after
+          // a page reload, for example. Errors are cleared on each jump.
+          setStep(s);
+          setError(null);
         }}
         items={STEPS.map((s) => ({
           id: s.id,
           label: `${s.id}. ${s.label}`,
-          // Future steps are disabled; current and past are clickable.
-          disabled: Number(s.id) > Number(step),
         }))}
       />
 
@@ -283,6 +281,96 @@ export default function OnboardingPage() {
           </Banner>
         </Card>
       )}
+
+      {step === "6" && <RenewProductionSection env={env} />}
     </div>
+  );
+}
+
+function RenewProductionSection({ env }: { env: "sandbox" | "simulation" | "production" }) {
+  const [otp, setOtp] = useState(env === "sandbox" ? "123456" : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ csid_id: string; replaced_csid_id: string; issued_at: string } | null>(null);
+  // Two-step confirm: clicking "Renew" first asks for confirmation, then
+  // clicking "Confirm renewal" actually fires the API call. Prevents accidental
+  // rotation of live credentials.
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    setOtp(env === "sandbox" ? "123456" : "");
+    setResult(null); setError(null); setConfirming(false);
+  }, [env]);
+
+  async function renew() {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await api.renewProductionCsid(token, { env, otp });
+      setResult(res);
+      setConfirming(false);
+    } catch (e) {
+      setError(String(e));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Card
+      title="Renew production CSID"
+      description={
+        env === "sandbox" ? (
+          <>Sandbox uses the fixed test OTP <code className="font-mono px-1.5 py-0.5 bg-[var(--color-bg-muted)] rounded">123456</code>. Click to rotate the active production credentials.</>
+        ) : (
+          <>Generate a fresh OTP at <a className="text-[var(--color-accent)] hover:underline" target="_blank" rel="noreferrer" href="https://fatoora.zatca.gov.sa">fatoora.zatca.gov.sa</a> before clicking. Renewal reuses your existing CSR + key, submits to ZATCA, and replaces the active CSID — the previous one is revoked so live invoices switch to the new credentials immediately.</>
+        )
+      }
+    >
+      {error && <div className="mb-3"><Banner tone="danger">{error}</Banner></div>}
+      {result && (
+        <div className="mb-4">
+          <Banner tone="success">
+            Renewed at {new Date(result.issued_at).toLocaleString()}.
+            New CSID <code className="font-mono">{result.csid_id.slice(0, 8)}…</code>{" "}
+            replaced <code className="font-mono">{result.replaced_csid_id.slice(0, 8)}…</code>.
+          </Banner>
+        </div>
+      )}
+      <FieldGrid cols={1}>
+        <Field label="OTP" required hint={env === "sandbox" ? "Sandbox test OTP" : "From fatoora.zatca.gov.sa"}>
+          <input
+            className="input font-mono"
+            value={otp}
+            onChange={(e) => { setOtp(e.target.value); setConfirming(false); }}
+            autoComplete="one-time-code"
+            placeholder="123456"
+            disabled={busy}
+          />
+        </Field>
+      </FieldGrid>
+      {confirming && (
+        <div className="mt-4">
+          <Banner tone="warning">
+            <strong>Confirm renewal for {env}.</strong> This will replace your active production CSID and revoke the current one. New invoices will be signed with the new credentials immediately.
+          </Banner>
+        </div>
+      )}
+      <div className="mt-4 flex gap-2">
+        {confirming ? (
+          <>
+            <button className="btn btn-primary" onClick={renew} disabled={busy || !otp}>
+              {busy ? "Renewing…" : "Confirm renewal"}
+            </button>
+            <button className="btn btn-default" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button className="btn btn-primary" onClick={() => setConfirming(true)} disabled={busy || !otp}>
+            {result ? "Renew again" : "Renew production CSID"}
+          </button>
+        )}
+      </div>
+    </Card>
   );
 }
