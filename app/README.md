@@ -117,7 +117,10 @@ asynchronously — clients watch the live event stream (below).
 ## Live updates (SSE)
 
 The worker and the API publish events to `tenant:{tenant_id}:events` on Redis.
-The browser subscribes via `GET /api/v1/events?token=<jwt>` and gets:
+The browser mints a short-lived ticket via `POST /api/v1/events/ticket`
+(`Authorization: Bearer <jwt>`), then subscribes with
+`GET /api/v1/events?ticket=<ticket>` — keeping the long-lived token out of the
+URL / access logs — and gets:
 
 | Event | When |
 | --- | --- |

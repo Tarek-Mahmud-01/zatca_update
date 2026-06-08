@@ -29,6 +29,22 @@ class Settings(BaseSettings):
     jwt_expires_minutes: int = 720
     rate_limit_per_second: int = 50
 
+    # Short-lived ticket used to authenticate the SSE stream (EventSource can't
+    # send an Authorization header, so the full JWT would otherwise end up in the
+    # URL / access logs). The browser mints one of these per connection over an
+    # authenticated POST; it only grants read access to the event stream.
+    sse_ticket_ttl_seconds: int = 60
+
+    # CORS. In dev, any localhost/127.0.0.1 port is allowed via the regex so the
+    # frontend port can shift freely. In production, set CORS_ALLOW_ORIGINS to an
+    # explicit comma-separated list and clear CORS_ALLOW_ORIGIN_REGEX.
+    cors_allow_origins: str = ""
+    cors_allow_origin_regex: str = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
     @property
     def assets_dir(self) -> Path:
         return Path(__file__).parent / "assets"

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "zatca-compliance": {
+      "command": "h:\\wamp64\\www\\zatca_update\\app\\backend\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "h:\\wamp64\\www\\zatca_update\\app\\backend"
+    }
+  }
+}

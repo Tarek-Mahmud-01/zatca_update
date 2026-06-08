@@ -15,6 +15,11 @@ export interface TokenResponse {
   token_type: "bearer";
 }
 
+export interface EventsTicket {
+  ticket: string;
+  expires_in: number;  // seconds the ticket is valid for opening the stream
+}
+
 export interface Me {
   user_id: string;
   email: string;
@@ -439,10 +444,11 @@ export const api = {
     token: string,
     env: "sandbox" | "simulation" | "production",
     payloads: unknown[],
+    submit_mode: "immediate" | "queued" = "immediate",
   ): Promise<BatchInvoiceResponse> {
     return request("/api/v1/invoices/batch", {
       method: "POST",
-      body: JSON.stringify({ env, payloads }),
+      body: JSON.stringify({ env, payloads, submit_mode }),
       token,
     });
   },
@@ -459,8 +465,14 @@ export const api = {
     });
   },
 
-  eventsUrl(token: string): string {
-    return `${BACKEND}/api/v1/events?token=${encodeURIComponent(token)}`;
+  // SSE auth: mint a short-lived ticket over an authenticated POST (token in
+  // the header, never the URL), then open the stream with that throwaway
+  // ticket. Keeps the long-lived API token out of URLs / access logs.
+  getEventsTicket(token: string) {
+    return request<EventsTicket>("/api/v1/events/ticket", { method: "POST", token });
+  },
+  eventsUrl(ticket: string): string {
+    return `${BACKEND}/api/v1/events?ticket=${encodeURIComponent(ticket)}`;
   },
 
   async getInvoice(token: string, id: string): Promise<InvoiceDetail> {

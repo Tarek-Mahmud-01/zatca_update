@@ -32,3 +32,5 @@ Thumbs.db
 
 # Custom
 .claude/
+pgdata5433/
+app/frontend/.env.local

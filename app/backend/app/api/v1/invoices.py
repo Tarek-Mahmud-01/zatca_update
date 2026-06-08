@@ -61,6 +61,9 @@ class SubmitInvoiceResponse(BaseModel):
 class BatchInvoiceRequest(BaseModel):
     env: ZatcaEnv
     payloads: list[InvoicePayload]
+    # "immediate" → sign + submit to ZATCA now (default).
+    # "queued"    → sign + leave queued; the scheduler tick drains them later.
+    submit_mode: str = "immediate"
 
 
 class BatchInvoiceItem(BaseModel):
@@ -341,8 +344,11 @@ async def submit_batch(
 
     await db.commit()
 
-    for inv_id in enqueue_ids:
-        await _enqueue(inv_id)
+    # "immediate" → push each to ZATCA now (via arq, inline fallback otherwise).
+    # "queued"    → leave them queued; the scheduler tick will drain on schedule.
+    if req.submit_mode == "immediate":
+        for inv_id in enqueue_ids:
+            await _enqueue(inv_id)
     for item in items:
         await publish(
             user.tenant_id, "invoice.queued",

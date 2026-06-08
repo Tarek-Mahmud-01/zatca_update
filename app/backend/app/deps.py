@@ -27,6 +27,10 @@ def current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> CurrentUser:
         payload = decode_access_token(token)
     except ValueError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_token")
+    # SSE stream tickets are scoped to the event stream only — never accept one
+    # as a credential for the regular API, even within its short lifetime.
+    if payload.get("typ") == "sse":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_token")
     return CurrentUser(
         user_id=UUID(payload["sub"]),
         tenant_id=UUID(payload["tid"]),

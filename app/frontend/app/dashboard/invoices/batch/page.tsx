@@ -10,11 +10,14 @@ import { Banner, Card, Field, PageHeader } from "../../../../components/ui";
 
 export default function BatchPage() {
   const router = useRouter();
-  const [env, setEnv] = useActiveEnv();
+  const [env] = useActiveEnv();
   const [json, setJson] = useState("[]");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BatchInvoiceResponse | null>(null);
+  // What happens after signing: submit to ZATCA now, or just queue them so
+  // the scheduler drains them on the tenant's schedule.
+  const [mode, setMode] = useState<"immediate" | "queued">("immediate");
 
   function loadSample() { setJson(JSON.stringify(SAMPLE_BATCH, null, 2)); }
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -25,16 +28,19 @@ export default function BatchPage() {
     reader.readAsText(f);
   }
 
-  async function submit() {
+  async function submit(submitMode: "immediate" | "queued") {
     const token = getToken();
     if (!token) return;
+    setMode(submitMode);
     setBusy(true);
     setError(null);
     setResult(null);
     try {
       const payloads = JSON.parse(json);
       if (!Array.isArray(payloads)) throw new Error("payloads must be a JSON array");
-      setResult(await api.submitBatch(token, env, payloads));
+      if (payloads.length === 0) throw new Error("payload array is empty");
+      if (payloads.length > 200) throw new Error("max 200 invoices per batch");
+      setResult(await api.submitBatch(token, env, payloads, submitMode));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -42,24 +48,21 @@ export default function BatchPage() {
     }
   }
 
+  const count = (() => {
+    try { const a = JSON.parse(json); return Array.isArray(a) ? a.length : 0; } catch { return 0; }
+  })();
+
   return (
     <div>
       <PageHeader
         title="Batch upload"
-        description="Up to 200 invoices per batch. Contiguous ICVs, signed and queued in one transaction."
+        description="Up to 200 invoices per batch. Contiguous ICVs, signed in one transaction. Targets the active environment."
         actions={<EnvBadge />}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2" title="Payload" description="Array of invoice payloads. Same shape as POST /api/v1/invoices.payload.">
           <div className="flex flex-col sm:flex-row gap-2 mb-3">
-            <Field label="Environment">
-              <select className="input" value={env} onChange={(e) => setEnv(e.target.value as typeof env)}>
-                <option value="sandbox">sandbox</option>
-                <option value="simulation">simulation</option>
-                <option value="production">production</option>
-              </select>
-            </Field>
             <Field label="JSON file">
               <input type="file" accept="application/json" onChange={onFile} className="text-sm file:btn file:btn-default file:mr-3" />
             </Field>
@@ -72,14 +75,30 @@ export default function BatchPage() {
             onChange={(e) => setJson(e.target.value)}
             className="input font-mono text-xs min-h-[360px] resize-y"
           />
+          {count > 0 && <p className="text-xs text-[var(--color-fg-muted)] mt-2">{count} invoice{count === 1 ? "" : "s"} in payload.</p>}
         </Card>
 
         <div className="flex flex-col gap-4">
           <Card title="Run">
-            <button className="btn btn-primary w-full" onClick={submit} disabled={busy}>
-              {busy ? "Submitting…" : `Submit batch to ${env}`}
+            <button
+              className="btn btn-primary w-full"
+              onClick={() => submit("immediate")}
+              disabled={busy || count === 0}
+            >
+              {busy && mode === "immediate" ? "Submitting…" : `Submit ${count || ""} to ${env}`}
             </button>
-            <button className="btn btn-default w-full mt-2" onClick={() => router.push("/dashboard/invoices")}>
+            <button
+              className="btn btn-default w-full mt-2"
+              onClick={() => submit("queued")}
+              disabled={busy || count === 0}
+            >
+              {busy && mode === "queued" ? "Queuing…" : `Save ${count || ""} to queue`}
+            </button>
+            <button
+              className="btn btn-ghost w-full mt-2"
+              onClick={() => router.push("/dashboard/invoices")}
+              disabled={busy}
+            >
               Back to list
             </button>
           </Card>
@@ -87,9 +106,11 @@ export default function BatchPage() {
           {error && <Banner tone="danger">{error}</Banner>}
           {result && (
             <Banner tone="success">
-              <div className="font-medium">Accepted {result.accepted}</div>
+              <div className="font-medium">
+                {mode === "immediate" ? "Submitted" : "Queued"} {result.accepted}
+              </div>
               <div className="text-xs mt-1 opacity-80">batch_id {result.batch_id}</div>
-              <div className="text-xs mt-1">Track progress on the Invoices page — rows appear live.</div>
+              <div className="text-xs mt-1">Track progress on the Invoices page — rows update live.</div>
             </Banner>
           )}
         </div>

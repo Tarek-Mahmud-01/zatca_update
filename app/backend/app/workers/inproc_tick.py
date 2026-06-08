@@ -79,14 +79,30 @@ async def _one_tick() -> None:
                 log.info("inproc-tick released %d invoice(s) for tenant=%s", count, t.id)
 
 
+_DB_DOWN_HINTS = ("Connect call failed", "could not connect", "Connection refused", "10061")
+
+
 async def run_forever(stop_event: asyncio.Event) -> None:
     """Tick loop — fires every ``_TICK_SECONDS``. Stops when ``stop_event`` is set."""
     log.info("inproc-tick started (every %ds)", _TICK_SECONDS)
+    db_down_logged = False
     while not stop_event.is_set():
         try:
             await _one_tick()
+            db_down_logged = False  # recovered
         except Exception as e:  # noqa: BLE001
-            log.exception("inproc-tick failed: %s", e)
+            msg = str(e)
+            if any(h in msg for h in _DB_DOWN_HINTS):
+                # DB unreachable (e.g. the 5433 cluster isn't running). Log a
+                # single concise line, not a fresh traceback every minute.
+                if not db_down_logged:
+                    log.warning(
+                        "inproc-tick: database unreachable — queue paused until it's back. "
+                        "Start it with start-db.bat. (%s)", msg.splitlines()[0][:120]
+                    )
+                    db_down_logged = True
+            else:
+                log.exception("inproc-tick failed: %s", e)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=_TICK_SECONDS)
         except asyncio.TimeoutError:

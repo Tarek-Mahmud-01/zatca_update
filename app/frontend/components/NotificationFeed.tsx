@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { api, type InvoiceEvent } from "../lib/api-client";
 import { getToken, handleAuthExpired } from "../lib/token";
 import { pushNotification, type Tone } from "../lib/notifications";
@@ -24,37 +24,41 @@ const TITLE_BY_TYPE: Record<string, string> = {
 };
 
 /**
- * Mount once at the dashboard layout level. Opens a single EventSource
- * against /api/v1/events, pushes everything into the global notification
+ * Mount once at the dashboard layout level. Opens a single SSE connection
+ * against /api/v1/events and pushes everything into the global notification
  * store. Pages subscribe to the store rather than each opening their own
- * SSE connection.
+ * connection.
  *
- * The SSE handshake doubles as the auth canary — no extra polling needed:
+ * Auth: EventSource can't send an Authorization header, so instead of putting
+ * the long-lived API token in the URL (where it leaks into access logs, history
+ * and Referer), we mint a short-lived single-purpose *ticket* over an
+ * authenticated POST and open the stream with that throwaway ticket.
  *
- *   - Server accepts (200 + text/event-stream) → readyState=OPEN.
- *     We mark the gate "authed". Browser auto-reconnects on transient drops.
+ * The ticket endpoint (a normal Bearer-authenticated request) is now the auth
+ * canary — if it returns 401, `request()` bounces us to /login. The stream
+ * itself is just transport: when it drops we mint a fresh ticket and reconnect
+ * with exponential backoff. Tickets expire in ~60s, so a leaked one is inert.
  *
- *   - Server rejects (401) → browser fires `error`, readyState=CLOSED and
- *     STAYS closed (EventSource does NOT auto-retry on non-2xx). That
- *     transition is our signal to bounce to /login.
- *
- *   - Network blip / server restart → readyState briefly = CONNECTING,
- *     browser reconnects automatically. We do nothing.
+ *   - Stream open            → reset backoff.
+ *   - readyState CONNECTING  → browser is retrying the same ticket; let it.
+ *   - readyState CLOSED      → ticket died / server refused → reconnect fresh.
+ *   - Ticket mint fails 401  → session is dead → handleAuthExpired (via request).
+ *   - Ticket mint fails else → backend down / network blip → back off & retry.
  */
-export function NotificationFeed() {
-  // Avoid acting on the burst of error events the browser fires during a
-  // normal reconnect. We only treat CLOSED as fatal after a short grace.
-  const closedGraceTimer = useRef<number | null>(null);
+const RECONNECT_MAX_MS = 30_000;
 
+export function NotificationFeed() {
   useEffect(() => {
-    const token = getToken();
-    if (!token) { handleAuthExpired(); return; }
+    let stopped = false;
+    let es: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let attempt = 0;
+
+    if (!getToken()) { handleAuthExpired(); return; }
 
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
-
-    const es = new EventSource(api.eventsUrl(token));
 
     function handle(ev: MessageEvent) {
       let data: InvoiceEvent;
@@ -79,45 +83,58 @@ export function NotificationFeed() {
       }
     }
 
-    function onOpen() {
-      // Cancel any pending "treat as auth failure" timer — the socket came back.
-      if (closedGraceTimer.current !== null) {
-        clearTimeout(closedGraceTimer.current);
-        closedGraceTimer.current = null;
+    function scheduleReconnect() {
+      if (stopped || reconnectTimer !== null) return;
+      const delay = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** attempt);
+      attempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    }
+
+    async function connect() {
+      if (stopped) return;
+      const token = getToken();
+      if (!token) { handleAuthExpired(); return; }
+
+      let ticket: string;
+      try {
+        ticket = (await api.getEventsTicket(token)).ticket;
+      } catch (err) {
+        // request() already redirected to /login on a 401 ("auth_expired").
+        // Anything else (backend down, network blip) is transient → back off.
+        if (err instanceof Error && err.message === "auth_expired") return;
+        scheduleReconnect();
+        return;
+      }
+      if (stopped) return;
+
+      const source = new EventSource(api.eventsUrl(ticket));
+      es = source;
+
+      source.addEventListener("open", () => { attempt = 0; });
+      source.addEventListener("error", () => {
+        // CONNECTING (0): browser is retrying the same ticket → let it ride.
+        // CLOSED (2): ticket expired or server refused → reconnect with a
+        // fresh ticket. The mint call will surface a real auth failure.
+        if (source.readyState !== EventSource.CLOSED) return;
+        source.close();
+        if (es === source) es = null;
+        scheduleReconnect();
+      });
+
+      for (const t of Object.keys(TONE_BY_TYPE)) {
+        source.addEventListener(t, handle as EventListener);
       }
     }
 
-    function onError() {
-      // EventSource readyState semantics:
-      //   CONNECTING (0) — transient, browser is reconnecting → ignore
-      //   OPEN       (1) — never paired with error
-      //   CLOSED     (2) — server returned non-2xx (typically 401) and the
-      //                    browser gave up. THIS is our auth-expired signal.
-      if (es.readyState !== EventSource.CLOSED) return;
-      if (closedGraceTimer.current !== null) return;
-      // Tiny grace window in case CLOSED is reported just before a fresh
-      // EventSource is created on a route change.
-      closedGraceTimer.current = window.setTimeout(() => {
-        closedGraceTimer.current = null;
-        if (es.readyState === EventSource.CLOSED) handleAuthExpired();
-      }, 500);
-    }
-
-    es.addEventListener("open", onOpen);
-    es.addEventListener("error", onError);
-
-    const types = Object.keys(TONE_BY_TYPE);
-    for (const t of types) es.addEventListener(t, handle as EventListener);
+    void connect();
 
     return () => {
-      if (closedGraceTimer.current !== null) {
-        clearTimeout(closedGraceTimer.current);
-        closedGraceTimer.current = null;
-      }
-      es.removeEventListener("open", onOpen);
-      es.removeEventListener("error", onError);
-      for (const t of types) es.removeEventListener(t, handle as EventListener);
-      es.close();
+      stopped = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      es?.close();
     };
   }, []);
 
