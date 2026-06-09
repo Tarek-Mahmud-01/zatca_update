@@ -13,6 +13,7 @@ import {
   type TenantOrganization,
 } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
+import { useMe } from "../../../../lib/store";
 import { useActiveEnv } from "../../../../lib/active-env";
 import { EnvBadge } from "../../../../components/EnvSwitcher";
 import { Banner, Card, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
@@ -135,7 +136,9 @@ export default function NewInvoicePage() {
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
   // Logged-in user's preferred branch (from /me.default_branch_id). Beats
   // the tenant-wide default branch when picking the initial selection.
-  const [userDefaultBranchId, setUserDefaultBranchId] = useState<string | null>(null);
+  // Sourced from the shared session (useMe) — no per-page /me fetch.
+  const { me } = useMe();
+  const userDefaultBranchId = me?.default_branch_id ?? null;
 
   // Editor mode, driven by the URL:
   //   ?edit=<id>  → in-place edit of a NOT-yet-issued invoice (replace same row)
@@ -167,10 +170,7 @@ export default function NewInvoicePage() {
     api.getBusinessSettings(token)
       .then(setBusiness)
       .catch(() => { /* fall back to defaults below */ });
-    // /me first so we know the user's default branch before pre-selecting.
-    api.me(token)
-      .then((m) => setUserDefaultBranchId(m.default_branch_id ?? null))
-      .catch(() => setUserDefaultBranchId(null));
+    // User's default branch comes from the shared session (useMe), not a fetch.
     Promise.all([
       api.listCurrencies(token),
       api.listOrganizations(token),

@@ -1,24 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  api,
-  type Me,
   type TenantBranch,
   type TenantOrganization,
 } from "../../../../lib/api-client";
-import { getToken } from "../../../../lib/token";
 import { Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { SearchSelect } from "../../../../components/SearchSelect";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useBranches, useOrganizations, branches as branchesSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe, useBranches, useOrganizations, branches as branchesSlice } from "../../../../lib/store";
 
 export default function BranchesSettingsPage() {
   const dispatch = useAppDispatch();
   const { items: branches, refetch: refetchBranches } = useBranches();
   const { items: organizations } = useOrganizations();
-  const [me, setMe] = useState<Me | null>(null);
+  const { me } = useMe();              // shared session — no per-page /me fetch
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -31,14 +28,6 @@ export default function BranchesSettingsPage() {
     [organizations],
   );
   const noOrgs = organizations.length === 0;
-
-  // Branches + organizations come from the store; load the user for admin gate.
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch((e) =>
-      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
-  }, []);
 
   async function create(v: Partial<TenantBranch> & { organization_id: string }) {
     setBusy(true);

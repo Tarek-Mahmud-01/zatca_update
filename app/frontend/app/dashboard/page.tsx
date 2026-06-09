@@ -23,16 +23,8 @@ export default function OverviewPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    api.listInvoices(token, { page_size: 200 }).then(({ items }) => {
-      const c = { ...EMPTY, total: items.length };
-      for (const i of items) {
-        if (i.status === "cleared")  c.cleared++;
-        else if (i.status === "reported") c.reported++;
-        else if (i.status === "queued" || i.status === "retrying") c.queued++;
-        else if (i.status.startsWith("failed") || i.status === "rejected") c.failed++;
-      }
-      setCounts(c);
-    });
+    // Lightweight grouped-count endpoint — not a 200-row page fetch.
+    api.getInvoiceStats(token).then(setCounts).catch(() => setCounts(EMPTY));
   }, []);
 
   useInvoiceEvents((event) => {

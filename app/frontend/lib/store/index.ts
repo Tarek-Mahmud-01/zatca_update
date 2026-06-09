@@ -15,8 +15,10 @@ import {
 } from "../api-client";
 import { createCrudSlice } from "./crud";
 import { invoicesReducer, invoicesActions, invoicesAdapter, fetchInvoices, type InvoiceListParams } from "./invoices";
+import { sessionReducer, sessionActions, fetchMe } from "./session";
 
 export { invoicesActions, fetchInvoices, type InvoiceListParams };
+export { sessionActions, fetchMe };
 
 // ---- entity slices (one line each via the CRUD factory) -------------------
 
@@ -86,6 +88,7 @@ export const store = configureStore({
     branches: branches.reducer,
     tenantUsers: tenantUsers.reducer,
     invoices: invoicesReducer,
+    session: sessionReducer,
   },
 });
 
@@ -135,6 +138,24 @@ function makeEntityHook<T>(
       refetch: () => dispatch(fetchAll()),
     };
   };
+}
+
+/**
+ * Current user, fetched once for the whole app. Replaces the ~9 components
+ * that each called `api.me()` on mount. First consumer triggers the fetch;
+ * the rest read from the store.
+ */
+export function useMe() {
+  const dispatch = useAppDispatch();
+  const me = useAppSelector((s) => s.session.me);
+  const loading = useAppSelector((s) => s.session.loading);
+  const loaded = useAppSelector((s) => s.session.loaded);
+  const error = useAppSelector((s) => s.session.error);
+  useEffect(() => {
+    if (!loaded && !loading) dispatch(fetchMe());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return { me, loading, loaded, error };
 }
 
 export const useCustomers     = makeEntityHook(customerSel.selectAll,     "customers",     customers.thunks.fetchAll);

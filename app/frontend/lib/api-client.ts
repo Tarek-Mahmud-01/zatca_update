@@ -316,6 +316,14 @@ export interface InvoiceListPage {
   total_pages: number;
 }
 
+export interface InvoiceStats {
+  total: number;
+  cleared: number;
+  reported: number;
+  queued: number;
+  failed: number;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit & { token?: string | null } = {},
@@ -352,6 +360,9 @@ export const api = {
   },
 
   me(token: string) { return request<Me>("/api/v1/auth/me", { token }); },
+
+  // Lightweight dashboard counters — one grouped COUNT, not a 200-row page.
+  getInvoiceStats(token: string) { return request<InvoiceStats>("/api/v1/invoices/stats", { token }); },
 
   listTenantUsers(token: string) { return request<TenantUser[]>("/api/v1/tenant-users", { token }); },
   inviteTenantUser(

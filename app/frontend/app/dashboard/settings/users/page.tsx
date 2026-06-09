@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   api,
-  type Me,
   type TenantBranch,
   type TenantUser,
 } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
-import { useAppDispatch, useTenantUsers, useBranches, tenantUsers as tenantUsersSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe, useTenantUsers, useBranches, tenantUsers as tenantUsersSlice } from "../../../../lib/store";
 
 type TabId = "list" | "invite";
 const ROLES = ["admin", "member", "viewer"] as const;
@@ -19,15 +18,8 @@ export default function UsersPage() {
   const { items: users, loading } = useTenantUsers();
   const { items: branches } = useBranches();
   const [tab, setTab] = useState<TabId>("list");
-  const [me, setMe] = useState<Me | null>(null);
+  const { me } = useMe();              // shared session — no per-page /me fetch
   const [error, setError] = useState<string | null>(null);
-
-  // Users + branches come from the store; load the current user for admin gate.
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch((e) => setError(String(e)));
-  }, []);
 
   async function changeRole(u: TenantUser, role: string) {
     const token = getToken();

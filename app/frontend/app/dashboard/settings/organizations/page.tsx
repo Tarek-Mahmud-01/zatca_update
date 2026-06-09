@@ -1,34 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  api,
-  type Me,
-  type TenantOrganization,
-} from "../../../../lib/api-client";
-import { getToken } from "../../../../lib/token";
+import { useState } from "react";
+import { type TenantOrganization } from "../../../../lib/api-client";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useOrganizations, organizations as organizationsSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe, useOrganizations, organizations as organizationsSlice } from "../../../../lib/store";
 
 export default function OrganizationsSettingsPage() {
   const dispatch = useAppDispatch();
   const { items: organizations, refetch } = useOrganizations();
-  const [me, setMe] = useState<Me | null>(null);
+  const { me } = useMe();              // shared session — no per-page /me fetch
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   const isAdmin = me?.role === "admin";
-
-  // Organizations come from the store; load the user once for the admin gate.
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch((e) =>
-      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
-  }, []);
 
   async function create(v: Partial<TenantOrganization>) {
     setBusy(true);

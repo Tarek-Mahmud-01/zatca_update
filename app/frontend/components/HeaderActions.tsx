@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { api, type Me } from "../lib/api-client";
-import { getToken, handleAuthExpired } from "../lib/token";
+import { handleAuthExpired } from "../lib/token";
+import { useMe } from "../lib/store";
 import {
   clearAll, markAllRead, useNotifications, type Notification,
 } from "../lib/notifications";
@@ -42,19 +42,13 @@ const TONE_DOT: Record<string, string> = {
 };
 
 export function HeaderActions() {
-  const [me, setMe] = useState<Me | null>(null);
+  const { me } = useMe();
   const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const bellRef = useRef<HTMLDivElement | null>(null);
 
   const { items: notifications, unread } = useNotifications();
-
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch(() => {});
-  }, []);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {

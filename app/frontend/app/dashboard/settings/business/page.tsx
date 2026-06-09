@@ -1,22 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { api, type Me } from "../../../../lib/api-client";
-import { getToken } from "../../../../lib/token";
 import { Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
-import { pushNotification } from "../../../../lib/notifications";
+import { useMe } from "../../../../lib/store";
 
 export default function BusinessSettingsPage() {
-  const [me, setMe] = useState<Me | null>(null);
-
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch((e) => pushNotification({
-      tone: "danger", title: "Couldn't load account", body: String(e),
-    }));
-  }, []);
+  const { me } = useMe();               // shared session — no per-page /me fetch
 
   return (
     <div className="flex flex-col gap-4">

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type Me, type TenantCurrency } from "../../../../lib/api-client";
+import { api, type TenantCurrency } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { DatePicker } from "../../../../components/DatePicker";
 import { pushNotification } from "../../../../lib/notifications";
+import { useMe } from "../../../../lib/store";
 
 const CURRENCY_META: Record<string, string> = {
   SAR: "Saudi Riyal", USD: "US Dollar", EUR: "Euro", GBP: "British Pound",
@@ -19,7 +20,7 @@ const CURRENCY_META: Record<string, string> = {
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 export default function ExchangeRatesPage() {
-  const [me, setMe]             = useState<Me | null>(null);
+  const { me } = useMe();              // shared session — no per-page /me fetch
   const [currencies, setCurrencies] = useState<TenantCurrency[]>([]);
   const [busy, setBusy]         = useState(false);
 
@@ -54,8 +55,8 @@ export default function ExchangeRatesPage() {
   async function refresh() {
     const token = getToken(); if (!token) return;
     try {
-      const [m, ccys] = await Promise.all([api.me(token), api.listCurrencies(token)]);
-      setMe(m); setCurrencies(ccys);
+      const ccys = await api.listCurrencies(token);
+      setCurrencies(ccys);
       const def = ccys.find((c) => c.is_default);
       const nonDef = ccys.find((c) => !c.is_default);
       // Default currency is the base — show it on the From side.

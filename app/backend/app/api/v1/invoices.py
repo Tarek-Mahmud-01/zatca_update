@@ -1232,6 +1232,43 @@ class InvoiceDetail(BaseModel):
     submissions: list[SubmissionOut]
 
 
+class InvoiceStats(BaseModel):
+    total: int
+    cleared: int
+    reported: int
+    queued: int
+    failed: int
+
+
+@router.get("/stats", response_model=InvoiceStats)
+async def invoice_stats(user: CurrentUserDep, db: DbSession) -> InvoiceStats:
+    """Lightweight dashboard counters — a single grouped COUNT per status,
+    not a 200-row page fetch. Keeps the first-screen load cheap.
+
+    Buckets: queued = queued+retrying; failed = rejected + failed_*.
+    Registered before /{invoice_id} so "stats" isn't parsed as a UUID.
+    """
+    rows = (
+        await db.execute(
+            select(Invoice.status, func.count())
+            .where(Invoice.tenant_id == user.tenant_id)
+            .group_by(Invoice.status)
+        )
+    ).all()
+    stats = InvoiceStats(total=0, cleared=0, reported=0, queued=0, failed=0)
+    for st, n in rows:
+        stats.total += n
+        if st == "cleared":
+            stats.cleared += n
+        elif st == "reported":
+            stats.reported += n
+        elif st in ("queued", "retrying"):
+            stats.queued += n
+        elif st == "rejected" or (st or "").startswith("failed"):
+            stats.failed += n
+    return stats
+
+
 @router.get("/{invoice_id}", response_model=InvoiceDetail)
 async def get_invoice(invoice_id: UUID, user: CurrentUserDep, db: DbSession) -> InvoiceDetail:
     inv = await db.scalar(

@@ -1,20 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { api, type Me } from "../../../../lib/api-client";
-import { getToken, handleAuthExpired } from "../../../../lib/token";
+import { handleAuthExpired } from "../../../../lib/token";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
+import { useMe } from "../../../../lib/store";
 
 export default function AccountSettingsPage() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    api.me(token).then(setMe).catch((e) => setError(String(e)));
-  }, []);
+  const { me, error } = useMe();       // shared session — no per-page /me fetch
 
   function signOut() {
     // Goes through the shared handler so the cookie is wiped AND every

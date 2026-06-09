@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type Me, type TenantCurrency } from "../../../../lib/api-client";
+import { useState } from "react";
+import { type TenantCurrency } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { DatePicker } from "../../../../components/DatePicker";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useCurrencies, currencies as currenciesSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe, useCurrencies, currencies as currenciesSlice } from "../../../../lib/store";
 
 const CURRENCY_META: Record<string, { name: string; shortName: string; country: string; symbol: string; decimals: number }> = {
   SAR: { name: "Saudi Riyal",        shortName: "Riyal",   country: "Saudi Arabia",    symbol: "ر.س",   decimals: 2 },
@@ -49,7 +49,7 @@ function todayIso() { return new Date().toISOString().slice(0, 10); }
 export default function CurrenciesSettingsPage() {
   const dispatch = useAppDispatch();
   const { items: currencies, refetch } = useCurrencies();
-  const [me, setMe]             = useState<Me | null>(null);
+  const { me } = useMe();              // shared session — no per-page /me fetch
   const [busy, setBusy]         = useState(false);
 
   // Filters (pending vs applied)
@@ -75,14 +75,6 @@ export default function CurrenciesSettingsPage() {
   }
 
   const isAdmin = me?.role === "admin";
-
-  // Currencies come from the Redux store (useCurrencies). We still load the
-  // current user once for the isAdmin gate.
-  useEffect(() => {
-    const token = getToken(); if (!token) return;
-    api.me(token).then(setMe).catch((e) =>
-      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
-  }, []);
 
   const filtered = currencies.filter((c) => {
     if (!appliedSearch) return true;
