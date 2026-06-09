@@ -29,6 +29,20 @@ class Settings(BaseSettings):
     jwt_expires_minutes: int = 720
     rate_limit_per_second: int = 50
 
+    # Background worker (arq, Redis-backed). ZATCA submission jobs are network-
+    # bound, so a single async worker runs many concurrently — tune per-worker
+    # concurrency here and scale OUT by running more worker replicas (they all
+    # pull from the same Redis queue). For multi-tenant high traffic, more
+    # replicas + a higher concurrency beats one fat worker.
+    worker_concurrency: int = 50      # arq max_jobs per worker process
+    worker_job_timeout: int = 120     # seconds allowed per submission job
+
+    # Single-host dev runs the queue scheduler INSIDE the API process (see
+    # main.py lifespan). When you run the dedicated arq worker — which has its
+    # own cron — set this False so the schedule isn't drained twice. It MUST be
+    # False behind multiple API workers/replicas (otherwise every replica ticks).
+    enable_inproc_tick: bool = True
+
     # Short-lived ticket used to authenticate the SSE stream (EventSource can't
     # send an Authorization header, so the full JWT would otherwise end up in the
     # URL / access logs). The browser mints one of these per connection over an

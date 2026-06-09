@@ -58,6 +58,14 @@ async def submit_queue_tick(ctx: dict) -> dict:
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     released_per_tenant: dict[str, int] = {}
     try:
+        # arq runs cron in EVERY worker process, so with N replicas this tick
+        # fires N times a minute. Take a short-lived per-minute Redis lock so
+        # exactly one replica drains the schedule — otherwise each queued
+        # invoice gets enqueued N times.
+        minute_key = now.strftime("%Y%m%d%H%M")
+        got_lock = await pool.set(f"queue_tick_lock:{minute_key}", "1", ex=70, nx=True)
+        if not got_lock:
+            return {}
         async with SessionLocal() as db:
             tenants = (await db.execute(select(Tenant))).scalars().all()
             for t in tenants:
@@ -101,6 +109,9 @@ class WorkerSettings:
     ]
     max_tries = 5
     retry_jobs = True
+    # I/O-bound jobs → run many at once per worker; scale out with more replicas.
+    max_jobs = get_settings().worker_concurrency
+    job_timeout = get_settings().worker_job_timeout
 
     @staticmethod
     def redis_settings() -> RedisSettings:

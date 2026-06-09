@@ -7,6 +7,7 @@ import { EnvBadge } from "../../components/EnvSwitcher";
 import { HeaderActions } from "../../components/HeaderActions";
 import { NotificationFeed } from "../../components/NotificationFeed";
 import { Toaster } from "../../components/Toaster";
+import { StoreProvider } from "../../lib/store/StoreProvider";
 import { handleAuthExpired, isTokenLive, subscribeAuthExpired } from "../../lib/token";
 
 const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
@@ -120,6 +121,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
+    <StoreProvider>
     <div className="min-h-screen bg-white">
       {/* Top bar */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-[var(--color-border)]">
@@ -174,5 +176,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <NotificationFeed />
       <Toaster />
     </div>
+    </StoreProvider>
   );
 }

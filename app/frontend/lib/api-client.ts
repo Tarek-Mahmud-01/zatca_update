@@ -235,6 +235,13 @@ export interface PromoteDraftResult {
   submit_mode: "queued" | "arq" | "inline";
 }
 
+export interface BulkPromoteResult {
+  queued: number;          // drafts moved to "queued"
+  skipped: number;         // ids not found / not a draft
+  submitting: boolean;     // true if an async submission run was started
+  invoice_ids: string[];   // promoted ids — track these over SSE
+}
+
 export interface BatchInvoiceItem {
   id: string;
   status: string;
@@ -440,6 +447,21 @@ export const api = {
     });
   },
 
+  // Edit-in-place for a not-yet-issued invoice. Re-signs with the same ICV/UUID.
+  // 409 if the invoice is already cleared/reported (amend with a note instead).
+  async replaceInvoice(
+    token: string,
+    id: string,
+    payload: unknown,
+    submit_mode: "immediate" | "queued" | "draft" = "draft",
+  ): Promise<SubmitInvoiceResponse> {
+    return request(`/api/v1/invoices/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ payload, submit_mode }),
+      token,
+    });
+  },
+
   async submitBatch(
     token: string,
     env: "sandbox" | "simulation" | "production",
@@ -487,6 +509,7 @@ export const api = {
       statuses?: string[];
       date_from?: string;
       date_to?: string;
+      q?: string;
     } = {},
   ): Promise<InvoiceListPage> {
     const qs = new URLSearchParams();
@@ -495,7 +518,18 @@ export const api = {
     if (opts.statuses && opts.statuses.length > 0) qs.set("statuses", opts.statuses.join(","));
     if (opts.date_from) qs.set("date_from", opts.date_from);
     if (opts.date_to)   qs.set("date_to",   opts.date_to);
+    if (opts.q && opts.q.trim()) qs.set("q", opts.q.trim());
     return request<InvoiceListPage>(`/api/v1/invoices?${qs}`, { token });
+  },
+
+  // Move many drafts to the queue at once. submit_now=true also dispatches them
+  // to ZATCA asynchronously (server returns immediately; track via SSE).
+  bulkPromote(token: string, ids: string[], submit_now: boolean) {
+    return request<BulkPromoteResult>("/api/v1/invoices/bulk-promote", {
+      method: "POST",
+      body: JSON.stringify({ ids, submit_now }),
+      token,
+    });
   },
 
   // ---- Categories ----

@@ -30,6 +30,33 @@ npm run dev
 
 Open http://localhost:3000.
 
+## Running at scale (Redis + background workers)
+
+Invoice submission is offloaded to a Redis-backed **arq** worker (async — one
+process handles many concurrent ZATCA round-trips). Scale by running more worker
+replicas; they all pull the same Redis queue.
+
+```bash
+# Full stack: postgres + redis + migrate + api + N workers
+cd app
+docker compose up -d --build
+docker compose up -d --scale worker=6     # more background throughput
+```
+
+Tuning knobs (env / `.env`):
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `WORKER_CONCURRENCY` | `50` | arq `max_jobs` — concurrent submissions per worker |
+| `WORKER_JOB_TIMEOUT` | `120` | seconds allowed per submission job |
+| `ENABLE_INPROC_TICK` | `true` | run the queue scheduler inside the API. **Set `false`** when running the arq worker or multiple API replicas (the worker's cron owns scheduling; otherwise the schedule drains more than once) |
+
+Scheduling is safe across replicas: the per-minute queue tick takes a short
+Redis lock (`queue_tick_lock:<minute>`), so exactly one worker drains the
+schedule no matter how many replicas run. Without Redis, a single API process
+falls back to the in-process tick + inline submission (fine for dev, not for
+load).
+
 ## What's in here
 
 | Step | What | Where |

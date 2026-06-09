@@ -9,46 +9,33 @@ import {
 } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
+import { useAppDispatch, useTenantUsers, useBranches, tenantUsers as tenantUsersSlice } from "../../../../lib/store";
 
 type TabId = "list" | "invite";
 const ROLES = ["admin", "member", "viewer"] as const;
 
 export default function UsersPage() {
+  const dispatch = useAppDispatch();
+  const { items: users, loading } = useTenantUsers();
+  const { items: branches } = useBranches();
   const [tab, setTab] = useState<TabId>("list");
   const [me, setMe] = useState<Me | null>(null);
-  const [users, setUsers] = useState<TenantUser[]>([]);
-  const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  async function reload() {
+  // Users + branches come from the store; load the current user for admin gate.
+  useEffect(() => {
     const token = getToken();
     if (!token) return;
-    setLoading(true);
-    try {
-      const [meRes, list, brs] = await Promise.all([
-        api.me(token),
-        api.listTenantUsers(token),
-        api.listBranches(token),
-      ]);
-      setMe(meRes);
-      setUsers(list);
-      setBranches(brs);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { reload(); }, []);
+    api.me(token).then(setMe).catch((e) => setError(String(e)));
+  }, []);
 
   async function changeRole(u: TenantUser, role: string) {
     const token = getToken();
     if (!token) return;
     try {
-      await api.updateTenantUserRole(token, u.id, role);
-      await reload();
+      // Role/branch endpoints return the fresh row — upsert it into the store.
+      const updated = await api.updateTenantUserRole(token, u.id, role);
+      dispatch(tenantUsersSlice.actions.upsertOne(updated));
     } catch (e) {
       setError(String(e));
     }
@@ -58,8 +45,8 @@ export default function UsersPage() {
     const token = getToken();
     if (!token) return;
     try {
-      await api.updateTenantUserBranch(token, u.id, branchId);
-      await reload();
+      const updated = await api.updateTenantUserBranch(token, u.id, branchId);
+      dispatch(tenantUsersSlice.actions.upsertOne(updated));
     } catch (e) {
       setError(String(e));
     }
@@ -67,11 +54,8 @@ export default function UsersPage() {
 
   async function remove(u: TenantUser) {
     if (!confirm(`Remove ${u.email}? They lose access immediately.`)) return;
-    const token = getToken();
-    if (!token) return;
     try {
-      await api.removeTenantUser(token, u.id);
-      await reload();
+      await dispatch(tenantUsersSlice.thunks.deleteOne(u.id)).unwrap();
     } catch (e) {
       setError(String(e));
     }
@@ -187,7 +171,7 @@ export default function UsersPage() {
       )}
 
       {tab === "invite" && isAdmin && (
-        <InviteForm branches={branches} onCancel={() => setTab("list")} onSaved={async () => { await reload(); setTab("list"); }} />
+        <InviteForm branches={branches} onCancel={() => setTab("list")} onSaved={() => setTab("list")} />
       )}
     </div>
   );
@@ -198,8 +182,9 @@ function InviteForm({
 }: {
   branches: TenantBranch[];
   onCancel: () => void;
-  onSaved: () => Promise<void>;
+  onSaved: () => void;
 }) {
+  const dispatch = useAppDispatch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<typeof ROLES[number]>("member");
@@ -209,16 +194,15 @@ function InviteForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     setError(null);
     try {
-      await api.inviteTenantUser(token, {
+      // Thunk upserts the new user into the store on success.
+      await dispatch(tenantUsersSlice.thunks.createOne({
         email, password, role,
         default_branch_id: defaultBranchId || null,
-      });
-      await onSaved();
+      })).unwrap();
+      onSaved();
     } catch (e) {
       setError(String(e));
     } finally {

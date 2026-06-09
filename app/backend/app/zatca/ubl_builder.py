@@ -148,12 +148,36 @@ class _InvoiceBase(BaseModel):
 
     payment_means_code: str = "10"  # cash
     notes: list[tuple[str, str]] = Field(default_factory=list)  # (lang, text)
-    instruction_note: str | None = None  # required for credit/debit
+    # Reason for issuing a credit/debit note (ZATCA KSA-10 → cbc:InstructionNote).
+    # `instruction_code` is an optional coded reason (e.g. CANCELLATION_OR_TERMINATION,
+    # as in the ZATCA standard-note samples); `instruction_note` is the free-text
+    # description. At least one is required for notes (BR-KSA-17); both are emitted.
+    instruction_code: str | None = None
+    instruction_note: str | None = None
     billing_reference_id: str | None = None  # required for credit/debit
     document_charges: list[DocumentAllowanceCharge] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_billing_ref_for_notes(self) -> "_InvoiceBase":
+        # ZATCA rejects credit/debit notes (type code 381/383) that lack a
+        # reason for issuance (KSA-10 → cbc:InstructionNote, rule BR-KSA-17) or
+        # a reference to the original invoice (cac:BillingReference). Enforce
+        # both here so we fail fast with a clear message instead of round-
+        # tripping to ZATCA only to get NOT_REPORTED/NOT_CLEARED back.
+        doc_type = getattr(self, "doc_type", "")
+        if doc_type.endswith("_credit_note") or doc_type.endswith("_debit_note"):
+            has_code = bool(self.instruction_code and self.instruction_code.strip())
+            has_note = bool(self.instruction_note and self.instruction_note.strip())
+            if not (has_code or has_note):
+                raise ValueError(
+                    "credit/debit notes require a reason for issuance "
+                    "(instruction_code and/or instruction_note) — ZATCA rule BR-KSA-17"
+                )
+            if not (self.billing_reference_id and str(self.billing_reference_id).strip()):
+                raise ValueError(
+                    "credit/debit notes require billing_reference_id "
+                    "(the original invoice number) — ZATCA cac:BillingReference"
+                )
         return self
 
 
@@ -454,6 +478,10 @@ def build_unsigned_ubl(payload: _InvoiceBase) -> bytes:
     if payload.payment_means_code:
         pm = _cac("PaymentMeans")
         pm.append(_cbc("PaymentMeansCode", payload.payment_means_code))
+        # Coded reason first (matches ZATCA standard-note samples), then the
+        # free-text description. Multiple InstructionNote elements are valid.
+        if payload.instruction_code:
+            pm.append(_cbc("InstructionNote", payload.instruction_code))
         if payload.instruction_note:
             pm.append(_cbc("InstructionNote", payload.instruction_note))
         root.append(pm)

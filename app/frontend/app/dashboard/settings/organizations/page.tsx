@@ -9,10 +9,12 @@ import {
 import { getToken } from "../../../../lib/token";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { pushNotification } from "../../../../lib/notifications";
+import { useAppDispatch, useOrganizations, organizations as organizationsSlice } from "../../../../lib/store";
 
 export default function OrganizationsSettingsPage() {
+  const dispatch = useAppDispatch();
+  const { items: organizations, refetch } = useOrganizations();
   const [me, setMe] = useState<Me | null>(null);
-  const [organizations, setOrganizations] = useState<TenantOrganization[]>([]);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -20,40 +22,32 @@ export default function OrganizationsSettingsPage() {
 
   const isAdmin = me?.role === "admin";
 
-  async function refresh() {
+  // Organizations come from the store; load the user once for the admin gate.
+  useEffect(() => {
     const token = getToken();
     if (!token) return;
-    try {
-      const [m, orgs] = await Promise.all([api.me(token), api.listOrganizations(token)]);
-      setMe(m);
-      setOrganizations(orgs);
-    } catch (e) {
-      pushNotification({ tone: "danger", title: "Couldn't load organizations", body: String(e) });
-    }
-  }
-  useEffect(() => { refresh(); }, []);
+    api.me(token).then(setMe).catch((e) =>
+      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
+  }, []);
 
   async function create(v: Partial<TenantOrganization>) {
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.createOrganization(token, v);
+      await dispatch(organizationsSlice.thunks.createOne(v)).unwrap();
       setAdding(false);
-      await refresh();
+      // is_default flips the previous default server-side → reconcile siblings.
+      if (v.is_default) refetch();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Create failed", body: String(e) });
     } finally { setBusy(false); }
   }
 
   async function update(id: string, v: Partial<TenantOrganization>) {
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.updateOrganization(token, id, v);
+      await dispatch(organizationsSlice.thunks.updateOne({ id, body: v })).unwrap();
       setEditingId(null);
-      await refresh();
+      if (v.is_default) refetch();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Update failed", body: String(e) });
     } finally { setBusy(false); }
@@ -61,12 +55,9 @@ export default function OrganizationsSettingsPage() {
 
   async function remove(o: TenantOrganization) {
     if (!confirm(`Remove "${o.name}"? Branches under it will also be removed.`)) return;
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.deleteOrganization(token, o.id);
-      await refresh();
+      await dispatch(organizationsSlice.thunks.deleteOne(o.id)).unwrap();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Delete failed", body: String(e) });
     } finally { setBusy(false); }

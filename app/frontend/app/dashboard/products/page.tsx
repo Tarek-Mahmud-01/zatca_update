@@ -1,43 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { api, type Category, type Product } from "../../../lib/api-client";
-import { getToken } from "../../../lib/token";
+import { useMemo, useState } from "react";
+import { type Category, type Product } from "../../../lib/api-client";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
 import { SearchSelect } from "../../../components/SearchSelect";
 import { VAT_CATEGORIES } from "../../../lib/catalog";
+import { useAppDispatch, useProducts, useCategories, products as productsSlice } from "../../../lib/store";
 
 type TabId = "list" | "add";
 
 export default function ProductsPage() {
+  const dispatch = useAppDispatch();
+  const { items: allRows, loading, error: loadError } = useProducts();
+  const { items: cats } = useCategories();
   const [tab, setTab] = useState<TabId>("list");
-  const [rows, setRows] = useState<Product[]>([]);
-  const [cats, setCats] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Product | null>(null);
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("");
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function reload() {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    try {
-      const [products, categories] = await Promise.all([
-        api.listProducts(token, { q: search || undefined, category_id: filterCat || undefined }),
-        api.listCategories(token),
-      ]);
-      setRows(products);
-      setCats(categories);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [search, filterCat]);
+  // Search + category filter applied client-side over the store.
+  const q = search.trim().toLowerCase();
+  const rows = allRows.filter((p) =>
+    (!q || p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) &&
+    (!filterCat || p.category_id === filterCat));
 
   function onEdit(p: Product) {
     setEditing(p);
@@ -46,11 +32,9 @@ export default function ProductsPage() {
 
   async function onDelete(p: Product) {
     if (!confirm(`Delete product "${p.name}"?`)) return;
-    const token = getToken();
-    if (!token) return;
+    setError(null);
     try {
-      await api.deleteProduct(token, p.id);
-      await reload();
+      await dispatch(productsSlice.thunks.deleteOne(p.id)).unwrap();
     } catch (e) {
       setError(String(e));
     }
@@ -79,7 +63,7 @@ export default function ProductsPage() {
         ]}
       />
 
-      {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
+      {(error || loadError) && <div className="mb-4"><Banner tone="danger">{error || loadError}</Banner></div>}
 
       {tab === "list" && (
         <>
@@ -152,7 +136,7 @@ export default function ProductsPage() {
           categories={cats}
           editing={editing}
           onCancel={() => { setEditing(null); setTab("list"); }}
-          onSaved={async () => { setEditing(null); await reload(); setTab("list"); }}
+          onSaved={() => { setEditing(null); setTab("list"); }}
         />
       )}
     </div>
@@ -165,8 +149,9 @@ function ProductForm({
   categories: Category[];
   editing: Product | null;
   onCancel: () => void;
-  onSaved: () => void | Promise<void>;
+  onSaved: () => void;
 }) {
+  const dispatch = useAppDispatch();
   const [form, setForm] = useState({
     sku:          editing?.sku ?? "",
     name:         editing?.name ?? "",
@@ -188,8 +173,6 @@ function ProductForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     setError(null);
     try {
@@ -199,9 +182,9 @@ function ProductForm({
         unit_price:  form.unit_price,
         tax_percent: form.tax_percent,
       };
-      if (editing) await api.updateProduct(token, editing.id, body as never);
-      else         await api.createProduct(token, body as never);
-      await onSaved();
+      if (editing) await dispatch(productsSlice.thunks.updateOne({ id: editing.id, body: body as never })).unwrap();
+      else         await dispatch(productsSlice.thunks.createOne(body as never)).unwrap();
+      onSaved();
     } catch (e) {
       setError(String(e));
     } finally {

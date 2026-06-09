@@ -5,6 +5,7 @@ import { api, type Me, type TenantCurrency } from "../../../../lib/api-client";
 import { getToken } from "../../../../lib/token";
 import { DatePicker } from "../../../../components/DatePicker";
 import { pushNotification } from "../../../../lib/notifications";
+import { useAppDispatch, useCurrencies, currencies as currenciesSlice } from "../../../../lib/store";
 
 const CURRENCY_META: Record<string, { name: string; shortName: string; country: string; symbol: string; decimals: number }> = {
   SAR: { name: "Saudi Riyal",        shortName: "Riyal",   country: "Saudi Arabia",    symbol: "ر.س",   decimals: 2 },
@@ -46,8 +47,9 @@ function getMeta(code: string) {
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 export default function CurrenciesSettingsPage() {
+  const dispatch = useAppDispatch();
+  const { items: currencies, refetch } = useCurrencies();
   const [me, setMe]             = useState<Me | null>(null);
-  const [currencies, setCurrencies] = useState<TenantCurrency[]>([]);
   const [busy, setBusy]         = useState(false);
 
   // Filters (pending vs applied)
@@ -74,16 +76,13 @@ export default function CurrenciesSettingsPage() {
 
   const isAdmin = me?.role === "admin";
 
-  async function refresh() {
+  // Currencies come from the Redux store (useCurrencies). We still load the
+  // current user once for the isAdmin gate.
+  useEffect(() => {
     const token = getToken(); if (!token) return;
-    try {
-      const [m, ccys] = await Promise.all([api.me(token), api.listCurrencies(token)]);
-      setMe(m); setCurrencies(ccys);
-    } catch (e) {
-      pushNotification({ tone: "danger", title: "Couldn't load currencies", body: String(e) });
-    }
-  }
-  useEffect(() => { refresh(); }, []);
+    api.me(token).then(setMe).catch((e) =>
+      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
+  }, []);
 
   const filtered = currencies.filter((c) => {
     if (!appliedSearch) return true;
@@ -101,15 +100,14 @@ export default function CurrenciesSettingsPage() {
     }
     setBusy(true);
     try {
-      await api.createCurrency(token, {
+      await dispatch(currenciesSlice.thunks.createOne({
         code: draft.code.toUpperCase(),
         exchange_rate: draft.exchange_rate || "1",
         as_of_date: draft.as_of_date || todayIso(),
         is_default: false,
-      });
+      })).unwrap();
       setShowNew(false);
       setDraft({ code: "USD", exchange_rate: "3.75", as_of_date: todayIso() });
-      await refresh();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Add currency failed", body: String(e) });
     } finally { setBusy(false); }
@@ -117,30 +115,33 @@ export default function CurrenciesSettingsPage() {
 
   async function saveEdit() {
     if (!editing) return;
-    const token = getToken(); if (!token) return;
     setBusy(true);
     try {
-      await api.updateCurrency(token, editing.currency.id, {
-        code: editing.currency.code,
-        exchange_rate: editing.rate,
-        as_of_date: editing.asOf,
-        is_default: editing.currency.is_default,
-      });
+      await dispatch(currenciesSlice.thunks.updateOne({
+        id: editing.currency.id,
+        body: {
+          code: editing.currency.code,
+          exchange_rate: editing.rate,
+          as_of_date: editing.asOf,
+          is_default: editing.currency.is_default,
+        },
+      })).unwrap();
       setEditing(null);
-      await refresh();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Update failed", body: String(e) });
     } finally { setBusy(false); }
   }
 
   async function makeDefault(c: TenantCurrency) {
-    const token = getToken(); if (!token) return;
     setBusy(true);
     try {
-      await api.updateCurrency(token, c.id, {
-        code: c.code, exchange_rate: c.exchange_rate, as_of_date: c.as_of_date, is_default: true,
-      });
-      await refresh();
+      await dispatch(currenciesSlice.thunks.updateOne({
+        id: c.id,
+        body: { code: c.code, exchange_rate: c.exchange_rate, as_of_date: c.as_of_date, is_default: true },
+      })).unwrap();
+      // Setting a new default unsets the previous one server-side — that second
+      // row isn't in the update response, so resync the whole list.
+      refetch();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Set default failed", body: String(e) });
     } finally { setBusy(false); }
@@ -148,11 +149,9 @@ export default function CurrenciesSettingsPage() {
 
   async function deactivate(c: TenantCurrency) {
     if (!confirm(`Remove ${c.code} — ${getMeta(c.code).name}?`)) return;
-    const token = getToken(); if (!token) return;
     setBusy(true);
     try {
-      await api.deleteCurrency(token, c.id);
-      await refresh();
+      await dispatch(currenciesSlice.thunks.deleteOne(c.id)).unwrap();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Remove failed", body: String(e) });
     } finally { setBusy(false); }

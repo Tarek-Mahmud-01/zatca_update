@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type Customer } from "../../../lib/api-client";
-import { getToken } from "../../../lib/token";
+import { useState } from "react";
+import { type Customer } from "../../../lib/api-client";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
+import { useAppDispatch, useCustomers, customers as customersSlice } from "../../../lib/store";
 
 type TabId = "list" | "add";
 
@@ -23,35 +23,26 @@ const EMPTY: Partial<Customer> = {
 };
 
 export default function CustomersPage() {
+  const dispatch = useAppDispatch();
+  const { items: allRows, loading, error: loadError } = useCustomers();
   const [tab, setTab] = useState<TabId>("list");
-  const [rows, setRows] = useState<Customer[]>([]);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function reload() {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    try {
-      setRows(await api.listCustomers(token, search || undefined));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [search]);
+  // Search now filters the store client-side (the full list lives in Redux).
+  const q = search.trim().toLowerCase();
+  const rows = q
+    ? allRows.filter((c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.vat_number ?? "").toLowerCase().includes(q))
+    : allRows;
 
   async function onDelete(c: Customer) {
     if (!confirm(`Delete customer "${c.name}"?`)) return;
-    const token = getToken();
-    if (!token) return;
+    setError(null);
     try {
-      await api.deleteCustomer(token, c.id);
-      await reload();
+      await dispatch(customersSlice.thunks.deleteOne(c.id)).unwrap();
     } catch (e) {
       setError(String(e));
     }
@@ -80,7 +71,7 @@ export default function CustomersPage() {
         ]}
       />
 
-      {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
+      {(error || loadError) && <div className="mb-4"><Banner tone="danger">{error || loadError}</Banner></div>}
 
       {tab === "list" && (
         <>
@@ -140,7 +131,7 @@ export default function CustomersPage() {
         <CustomerForm
           editing={editing}
           onCancel={() => { setEditing(null); setTab("list"); }}
-          onSaved={async () => { setEditing(null); await reload(); setTab("list"); }}
+          onSaved={() => { setEditing(null); setTab("list"); }}
         />
       )}
     </div>
@@ -152,8 +143,9 @@ function CustomerForm({
 }: {
   editing: Customer | null;
   onCancel: () => void;
-  onSaved: () => void | Promise<void>;
+  onSaved: () => void;
 }) {
+  const dispatch = useAppDispatch();
   const [form, setForm] = useState<Partial<Customer>>(editing ?? EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -164,8 +156,6 @@ function CustomerForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     setError(null);
     try {
@@ -177,9 +167,9 @@ function CustomerForm({
         email:       form.email       || null,
         phone:       form.phone       || null,
       };
-      if (editing) await api.updateCustomer(token, editing.id, body);
-      else         await api.createCustomer(token, body);
-      await onSaved();
+      if (editing) await dispatch(customersSlice.thunks.updateOne({ id: editing.id, body })).unwrap();
+      else         await dispatch(customersSlice.thunks.createOne(body)).unwrap();
+      onSaved();
     } catch (e) {
       setError(String(e));
     } finally {

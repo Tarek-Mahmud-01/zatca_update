@@ -21,17 +21,24 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # In-process queue scheduler: ticks every minute and drains tenants
     # whose schedule matches. Replaces the need for a separate arq worker
-    # in single-server / no-Redis setups.
+    # in single-server / no-Redis setups. Disable (ENABLE_INPROC_TICK=false)
+    # when running the dedicated arq worker or multiple API replicas, so the
+    # schedule isn't drained more than once.
     stop_event = asyncio.Event()
-    task = asyncio.create_task(run_inproc_tick(stop_event))
+    task = (
+        asyncio.create_task(run_inproc_tick(stop_event))
+        if settings.enable_inproc_tick
+        else None
+    )
     try:
         yield
     finally:
         stop_event.set()
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except asyncio.TimeoutError:
-            task.cancel()
+        if task is not None:
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.TimeoutError:
+                task.cancel()
 
 
 app = FastAPI(

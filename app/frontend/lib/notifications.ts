@@ -53,6 +53,44 @@ export function getNotifications(): readonly Notification[] {
   return _list;
 }
 
+/* ----- queued-echo suppression --------------------------------------- *
+ * When a page shows its own "saved to queue" toast for an invoice, the
+ * tenant-wide SSE stream also delivers an `invoice.queued` event for the same
+ * row. On the initiating tab that's a duplicate. `suppressQueuedEcho` is called
+ * with the invoice id as the local toast is shown; the SSE handler then drops
+ * the matching echo. Both arrival orders are covered: a later echo is skipped
+ * via `shouldSuppressQueued`, and an echo that already landed (SSE can beat the
+ * fetch response) is removed here. Other tabs are unaffected. */
+const _suppressQueued = new Map<string, number>();  // invoiceId -> expiry ms
+const QUEUED_TITLE = "Invoice queued";
+
+export function suppressQueuedEcho(invoiceId: string, ttlMs = 15_000): void {
+  _suppressQueued.set(invoiceId, Date.now() + ttlMs);
+  const href = `/dashboard/invoices/${invoiceId}`;
+  let removed = false;
+  for (let i = _list.length - 1; i >= 0; i--) {
+    if (_list[i].href === href && _list[i].title === QUEUED_TITLE) {
+      _list.splice(i, 1);
+      removed = true;
+    }
+  }
+  for (let i = _toastQueue.length - 1; i >= 0; i--) {
+    if (_toastQueue[i].href === href && _toastQueue[i].title === QUEUED_TITLE) {
+      _toastQueue.splice(i, 1);
+    }
+  }
+  if (removed) notify();
+}
+
+/** True (and consumes the entry) if a just-arrived `invoice.queued` for this
+ *  invoice is an echo of a local toast already shown on this tab. */
+export function shouldSuppressQueued(invoiceId: string): boolean {
+  const exp = _suppressQueued.get(invoiceId);
+  if (exp === undefined) return false;
+  _suppressQueued.delete(invoiceId);
+  return Date.now() <= exp;
+}
+
 export function getUnreadCount(): number {
   return _list.filter((n) => !n.read).length;
 }

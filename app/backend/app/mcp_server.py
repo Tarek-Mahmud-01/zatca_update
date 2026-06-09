@@ -105,6 +105,9 @@ class Session:
     prev_pih: str = GENESIS_PIH
     env: str = "sandbox"          # "sandbox" | "simulation"
     otp: str = SANDBOX_OTP        # sandbox uses 123456; simulation needs a real one
+    # Most recent *invoice* (not note) submitted this session — used as the
+    # default reference for make_credit_note / make_debit_note ("first search").
+    last_invoice_number: str | None = None
 
     @property
     def base(self) -> str:
@@ -293,9 +296,48 @@ async def _ensure_ccsid() -> str | None:
     return None
 
 
-async def _submit_one(doc_type: str) -> dict:
-    """Build → sign → submit one invoice of ``doc_type`` to /compliance/invoices."""
-    payload = _build_payload(doc_type)
+def _parse_date(s: str | None) -> date:
+    """Parse a YYYY-MM-DD string, defaulting to today's date when empty/invalid."""
+    if not s or not s.strip():
+        return date.today()
+    try:
+        return date.fromisoformat(s.strip())
+    except ValueError:
+        return date.today()
+
+
+def _custom_kw(
+    supplier: Party, customer: Party, number: str, *,
+    net: Decimal, description: str, issue_date: date,
+) -> dict:
+    """One-line payload kwargs for a given net (pre-VAT) amount at 15% VAT."""
+    net = _q(net)
+    vat = _q(net * Decimal("0.15"))
+    total = _q(net + vat)
+    line = InvoiceLine(
+        id="1", name=description,
+        quantity=Decimal("1"), unit_code="PCE", unit_price=net,
+        line_extension=net, tax_amount=vat, rounding_amount=total,
+        tax_percent=Decimal("15"),
+    )
+    return dict(
+        invoice_number=number, uuid=uuid4(),
+        issue_date=issue_date, issue_time=_now_time(),
+        icv=0, pih_b64="",
+        supplier=supplier, customer=customer,
+        lines=[line],
+        tax_subtotals=[TaxSubtotal(taxable_amount=net, tax_amount=vat)],
+        monetary_totals=MonetaryTotals(
+            line_extension=net, tax_exclusive=net,
+            tax_inclusive=total, payable_amount=total,
+        ),
+        payment_means_code="10", notes=[],
+    )
+
+
+async def _sign_and_submit(payload: _InvoiceBase) -> dict:
+    """Sign a built payload, advance the PIH chain, submit to /compliance/invoices,
+    and record it as the session's last invoice (so notes can reference it)."""
     _S.icv += 1
     bound = payload.model_copy(update={"icv": _S.icv, "pih_b64": _S.prev_pih})
     processed = process_invoice(
@@ -333,6 +375,10 @@ async def _submit_one(doc_type: str) -> dict:
         f"{e.get('code')}: {e.get('message')}"
         for e in (vr.get("errorMessages") or [])
     ]
+    doc_type = getattr(bound, "doc_type", "")
+    # Remember the latest plain invoice so credit/debit notes can auto-reference it.
+    if passed and not doc_type.endswith("_note"):
+        _S.last_invoice_number = bound.invoice_number
     return {
         "doc_type": doc_type,
         "icv": _S.icv,
@@ -342,6 +388,11 @@ async def _submit_one(doc_type: str) -> dict:
         "passed": passed,
         "errors": errors[:5],
     }
+
+
+async def _submit_one(doc_type: str) -> dict:
+    """Build → sign → submit one default invoice of ``doc_type``."""
+    return await _sign_and_submit(_build_payload(doc_type))
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +426,7 @@ async def onboard(
     _S.certificate_pem = None
     _S.icv = 0
     _S.prev_pih = GENESIS_PIH
+    _S.last_invoice_number = None
     err = await _ensure_ccsid()
     if err:
         return {"ok": False, "error": err, "env": env}
@@ -406,6 +458,134 @@ async def test_invoice_type(doc_type: str) -> dict:
         return {"ok": False, "error": err}
     result = await _submit_one(doc_type)
     return {"ok": True, **result}
+
+
+@mcp.tool()
+async def make_invoice(
+    amount: float = 100.0,
+    description: str = "Consulting services",
+    simplified: bool = True,
+    customer_name: str = "",
+    vat_number: str = "",
+    issue_date: str = "",
+) -> dict:
+    """Create, sign, and submit a tax invoice to ZATCA.
+
+    amount is the net (pre-VAT) line total; 15% VAT is added automatically.
+    simplified=True → B2C simplified invoice (walk-in customer); False → B2B
+    standard invoice (pass customer_name + vat_number, or a default B2B buyer is
+    used). issue_date defaults to today (YYYY-MM-DD to override). The resulting
+    invoice number becomes the default reference for make_credit_note / _debit_note.
+    """
+    err = await _ensure_ccsid()
+    if err:
+        return {"ok": False, "error": err}
+    supplier = _supplier()
+    if simplified:
+        customer = _b2c_customer()
+        cls = SimplifiedInvoice
+    else:
+        cls = StandardInvoice
+        customer = (
+            Party(
+                registration_name=customer_name, vat_number=(vat_number or None),
+                street="N/A", building_number="0", city_subdivision="N/A",
+                city="Riyadh", postal_zone="00000", country_code="SA",
+            )
+            if customer_name else _b2b_customer()
+        )
+    number = f"MCP-INV-{_S.icv + 1:04d}"
+    payload = cls(**_custom_kw(
+        supplier, customer, number,
+        net=Decimal(str(amount)), description=description, issue_date=_parse_date(issue_date),
+    ))
+    return {"ok": True, **await _sign_and_submit(payload)}
+
+
+async def _make_note(
+    *, is_credit: bool, amount: float, reason: str, reference: str,
+    reason_code: str, simplified: bool, description: str, issue_date: str,
+) -> dict:
+    err = await _ensure_ccsid()
+    if err:
+        return {"ok": False, "error": err}
+    if not (reason.strip() or reason_code.strip()):
+        return {"ok": False, "error": "a reason (or reason_code) is required — ZATCA rule BR-KSA-17"}
+    # "First search" for the original invoice to reference: explicit arg wins,
+    # else fall back to the most recent invoice created this session.
+    ref = reference.strip() or (_S.last_invoice_number or "")
+    if not ref:
+        return {
+            "ok": False,
+            "error": "no reference invoice — pass `reference=<invoice number>` or call make_invoice first",
+        }
+    kind = "credit_note" if is_credit else "debit_note"
+    cls = (SimplifiedCreditNote if is_credit else SimplifiedDebitNote) if simplified \
+        else (StandardCreditNote if is_credit else StandardDebitNote)
+    supplier = _supplier()
+    customer = _b2c_customer() if simplified else _b2b_customer()
+    number = f"MCP-{'CN' if is_credit else 'DN'}-{_S.icv + 1:04d}"
+    desc = description or (("Refund — " if is_credit else "Additional charge — ") + (reason or reason_code))
+    kw = _custom_kw(
+        supplier, customer, number,
+        net=Decimal(str(amount)), description=desc, issue_date=_parse_date(issue_date),
+    )
+    kw["billing_reference_id"] = ref
+    if reason_code.strip():
+        kw["instruction_code"] = reason_code.strip()
+    if reason.strip():
+        kw["instruction_note"] = reason.strip()
+    payload = cls(**kw)
+    res = await _sign_and_submit(payload)
+    return {"ok": True, "note_kind": kind, "references": ref, **res}
+
+
+@mcp.tool()
+async def make_credit_note(
+    amount: float = 100.0,
+    reason: str = "",
+    reference: str = "",
+    reason_code: str = "",
+    simplified: bool = True,
+    description: str = "",
+    issue_date: str = "",
+) -> dict:
+    """Create, sign, and submit a CREDIT note (reduction/refund) to ZATCA.
+
+    A credit/debit note must reference the original invoice and carry a reason
+    (BR-KSA-17). `reference` is the original invoice number — if omitted, the most
+    recent invoice created this session is used. Provide `reason` (free text)
+    and/or `reason_code` (e.g. CANCELLATION_OR_TERMINATION); at least one is
+    required. issue_date defaults to today.
+    """
+    return await _make_note(
+        is_credit=True, amount=amount, reason=reason, reference=reference,
+        reason_code=reason_code, simplified=simplified, description=description,
+        issue_date=issue_date,
+    )
+
+
+@mcp.tool()
+async def make_debit_note(
+    amount: float = 100.0,
+    reason: str = "",
+    reference: str = "",
+    reason_code: str = "",
+    simplified: bool = True,
+    description: str = "",
+    issue_date: str = "",
+) -> dict:
+    """Create, sign, and submit a DEBIT note (additional charge) to ZATCA.
+
+    Same rules as make_credit_note: references the original invoice (defaults to
+    the most recent invoice this session) and requires a reason and/or
+    reason_code (BR-KSA-17). issue_date defaults to today.
+    """
+    return await _make_note(
+        is_credit=False, amount=amount, reason=reason, reference=reference,
+        reason_code=reason_code, simplified=simplified, description=description,
+        issue_date=issue_date,
+    )
 
 
 @mcp.tool()

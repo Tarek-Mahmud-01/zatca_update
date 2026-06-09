@@ -1,33 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type Category } from "../../../lib/api-client";
-import { getToken } from "../../../lib/token";
+import { useState } from "react";
+import { type Category } from "../../../lib/api-client";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
+import { useAppDispatch, useCategories, categories as categoriesSlice } from "../../../lib/store";
 
 type TabId = "list" | "add";
 
 export default function CategoriesPage() {
+  const dispatch = useAppDispatch();
+  const { items: rows, loading, error: loadError } = useCategories();
   const [tab, setTab] = useState<TabId>("list");
-  const [rows, setRows] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  async function reload() {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    try {
-      setRows(await api.listCategories(token));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { reload(); }, []);
 
   function onEdit(cat: Category) {
     setEditing(cat);
@@ -36,11 +21,10 @@ export default function CategoriesPage() {
 
   async function onDelete(cat: Category) {
     if (!confirm(`Delete category "${cat.name}"?`)) return;
-    const token = getToken();
-    if (!token) return;
+    setError(null);
     try {
-      await api.deleteCategory(token, cat.id);
-      await reload();
+      // Store removes the row on success — no refetch.
+      await dispatch(categoriesSlice.thunks.deleteOne(cat.id)).unwrap();
     } catch (e) {
       setError(String(e));
     }
@@ -69,7 +53,7 @@ export default function CategoriesPage() {
         ]}
       />
 
-      {error && <div className="mb-4"><Banner tone="danger">{error}</Banner></div>}
+      {(error || loadError) && <div className="mb-4"><Banner tone="danger">{error || loadError}</Banner></div>}
 
       {tab === "list" && (
         loading ? <p className="muted">Loading…</p> :
@@ -114,7 +98,7 @@ export default function CategoriesPage() {
         <CategoryForm
           editing={editing}
           onCancel={() => { setEditing(null); setTab("list"); }}
-          onSaved={async () => { setEditing(null); await reload(); setTab("list"); }}
+          onSaved={() => { setEditing(null); setTab("list"); }}
         />
       )}
     </div>
@@ -123,7 +107,8 @@ export default function CategoriesPage() {
 
 function CategoryForm({
   editing, onCancel, onSaved,
-}: { editing: Category | null; onCancel: () => void; onSaved: () => void | Promise<void> }) {
+}: { editing: Category | null; onCancel: () => void; onSaved: () => void }) {
+  const dispatch = useAppDispatch();
   const [name, setName] = useState(editing?.name ?? "");
   const [description, setDescription] = useState(editing?.description ?? "");
   const [busy, setBusy] = useState(false);
@@ -131,14 +116,13 @@ function CategoryForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     setError(null);
     try {
-      if (editing) await api.updateCategory(token, editing.id, { name, description });
-      else         await api.createCategory(token, { name, description });
-      await onSaved();
+      // Thunk upserts the returned row into the store on success.
+      if (editing) await dispatch(categoriesSlice.thunks.updateOne({ id: editing.id, body: { name, description } })).unwrap();
+      else         await dispatch(categoriesSlice.thunks.createOne({ name, description })).unwrap();
+      onSaved();
     } catch (e) {
       setError(String(e));
     } finally {

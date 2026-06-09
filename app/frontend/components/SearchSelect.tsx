@@ -17,6 +17,7 @@ interface Props {
   disabled?: boolean;
   required?: boolean;
   className?: string;
+  id?: string;  // applied to the trigger button so the field can be focused/scrolled to
 }
 
 export function SearchSelect({
@@ -27,6 +28,7 @@ export function SearchSelect({
   searchPlaceholder = "Search…",
   disabled = false,
   className = "",
+  id,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -69,6 +71,7 @@ export function SearchSelect({
       {/* Trigger */}
       <button
         type="button"
+        id={id}
         disabled={disabled}
         onClick={() => { if (!disabled) setOpen((p) => !p); }}
         className={`input w-full text-left flex items-center justify-between gap-2 ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}

@@ -6,13 +6,14 @@ import {
   api,
   type InvoiceEvent,
   type InvoiceListItem,
-  type InvoiceListPage,
 } from "../../../lib/api-client";
 import { getToken } from "../../../lib/token";
 import { useActiveEnv } from "../../../lib/active-env";
 import { usePreferences } from "../../../lib/preferences";
 import { useInvoiceEvents } from "../../../lib/use-invoice-events";
-import { pushNotification } from "../../../lib/notifications";
+import { pushNotification, suppressQueuedEcho } from "../../../lib/notifications";
+import { trackSubmitBatch } from "../../../lib/batch-tracker";
+import { useAppDispatch, useAppSelector, invoiceSel, invoicesActions, fetchInvoices } from "../../../lib/store";
 import { Card, Empty, Field, PageHeader, StatusDot } from "../../../components/ui";
 import { DatePicker } from "../../../components/DatePicker";
 
@@ -39,17 +40,33 @@ export default function InvoicesPage() {
   const [draftStatuses, setDraftStatuses] = useState<StatusOption[]>([]);
   const [draftFrom, setDraftFrom]         = useState<string>("");
   const [draftTo, setDraftTo]             = useState<string>("");
+  const [draftQ, setDraftQ]               = useState<string>("");
   const [statuses, setStatuses]           = useState<StatusOption[]>([]);
   const [dateFrom, setDateFrom]           = useState<string>("");
   const [dateTo, setDateTo]               = useState<string>("");
+  const [q, setQ]                         = useState<string>("");
 
-  const [page, setPage] = useState(1);
-  const [data, setData] = useState<InvoiceListPage | null>(null);
+  const dispatch = useAppDispatch();
+  // Invoice rows + pagination now live in the Redux store.
+  const items = useAppSelector(invoiceSel.selectAll);
+  const invMeta = useAppSelector((s) => s.invoices);
+  const loading = invMeta.loading;
+
+  const [page, setPageState] = useState(1);
   const [pulse, setPulse] = useState<Set<string>>(new Set());
   const [seeding, setSeeding] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [defaultCurrency, setDefaultCurrency] = useState<string>("");
+
+  // Bulk selection of draft rows (scoped to the current page).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Changing page should drop the (page-scoped) selection.
+  const setPage = useCallback((p: number) => {
+    setSelected(new Set());
+    setPageState(p);
+  }, []);
 
   useEffect(() => {
     const token = getToken();
@@ -63,39 +80,56 @@ export default function InvoicesPage() {
   }, []);
 
   const reload = useCallback(async () => {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
     try {
-      setData(await api.listInvoices(token, {
+      // Thunk sets the page items + pagination into the store on success.
+      await dispatch(fetchInvoices({
         page, page_size: pageSize, statuses,
         date_from: dateFrom || undefined,
         date_to:   dateTo   || undefined,
-      }));
+        q:         q        || undefined,
+      })).unwrap();
     } catch (e) {
-      pushNotification({ tone: "danger", title: "Failed to load invoices", body: String(e) });
-    } finally {
-      setLoading(false);
+      if (e !== "not_authenticated") {
+        pushNotification({ tone: "danger", title: "Failed to load invoices", body: String(e) });
+      }
     }
-  }, [page, pageSize, statuses, dateFrom, dateTo]);
+  }, [dispatch, page, pageSize, statuses, dateFrom, dateTo, q]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // The bulk-submit tracker fires later (as SSE events arrive), so it needs the
+  // *latest* reload, not the one captured when the batch started. Debounce so a
+  // burst of terminal events triggers at most one refresh.
+  const reloadRef = useRef(reload);
+  useEffect(() => { reloadRef.current = reload; }, [reload]);
+  const bulkReloadTimer = useRef<number | null>(null);
+  const debouncedReload = useCallback(() => {
+    if (bulkReloadTimer.current !== null) return;
+    bulkReloadTimer.current = window.setTimeout(() => {
+      bulkReloadTimer.current = null;
+      reloadRef.current();
+    }, 1200);
+  }, []);
 
   function applyFilters() {
     setPage(1);
     setStatuses(draftStatuses);
     setDateFrom(draftFrom);
     setDateTo(draftTo);
+    setQ(draftQ);
   }
   function resetFilters() {
-    setDraftStatuses([]); setDraftFrom(""); setDraftTo("");
-    setStatuses([]);      setDateFrom("");  setDateTo("");
+    setDraftStatuses([]); setDraftFrom(""); setDraftTo(""); setDraftQ("");
+    setStatuses([]);      setDateFrom("");  setDateTo("");  setQ("");
     setPage(1);
   }
 
   useInvoiceEvents((event: InvoiceEvent) => {
     setPulse((s) => new Set(s).add(event.invoice_id));
     setTimeout(() => setPulse((s) => { const n = new Set(s); n.delete(event.invoice_id); return n; }), 1500);
+    // Instant in-place status mutation for the affected row (works on any page).
+    if (event.status) dispatch(invoicesActions.patchStatus({ id: event.invoice_id, status: event.status }));
+    // On page 1, also resync to pull in brand-new rows / re-sort.
     if (page === 1) reload();
   });
 
@@ -187,10 +221,74 @@ export default function InvoicesPage() {
     setDraftStatuses((prev) => on ? [...prev, s] : prev.filter((x) => x !== s));
   }
 
-  const items: InvoiceListItem[] = data?.items ?? [];
-  const totalPages = data?.total_pages ?? 1;
-  const total = data?.total ?? 0;
-  const hasFilters = statuses.length > 0 || !!dateFrom || !!dateTo;
+  const totalPages = invMeta.totalPages;
+  const total = invMeta.total;
+  const hasFilters = statuses.length > 0 || !!dateFrom || !!dateTo || !!q;
+
+  // ---- bulk selection (draft rows on the current page) ----
+  const draftIds = items.filter((r) => r.status === "draft").map((r) => r.id);
+  const selectedCount = selected.size;
+  const allDraftsSelected = draftIds.length > 0 && draftIds.every((id) => selected.has(id));
+
+  function toggleOne(id: string, on: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+  function toggleAllDrafts(on: boolean) {
+    setSelected(on ? new Set(draftIds) : new Set());
+  }
+
+  async function bulkMoveToQueue() {
+    const token = getToken();
+    if (!token || selectedCount === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await api.bulkPromote(token, [...selected], false);
+      // The server broadcasts invoice.queued per row; swallow our own echoes so
+      // we show one summary instead of N "Invoice queued" toasts.
+      for (const id of res.invoice_ids) suppressQueuedEcho(id);
+      pushNotification({
+        tone: res.queued > 0 ? "success" : "info",
+        title: res.queued > 0 ? `Moved ${res.queued} to queue` : "Nothing to move",
+        body: res.skipped > 0 ? `${res.skipped} skipped (not drafts).` : undefined,
+      });
+      setSelected(new Set());
+      reload();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Move to queue failed", body: String(e) });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkSubmit() {
+    const token = getToken();
+    if (!token || selectedCount === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await api.bulkPromote(token, [...selected], true);
+      if (res.invoice_ids.length > 0) {
+        // Track each invoice's SSE lifecycle into a single summary notification.
+        trackSubmitBatch(res.invoice_ids, { onUpdate: debouncedReload });
+      }
+      pushNotification({
+        tone: "info",
+        title: `Submitting ${res.queued} invoice${res.queued === 1 ? "" : "s"}…`,
+        body: res.skipped > 0
+          ? `${res.skipped} skipped (not drafts). You'll get a summary when done.`
+          : "You'll get a summary when done.",
+      });
+      setSelected(new Set());
+      reload();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Bulk submit failed", body: String(e) });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   return (
     <div>
@@ -230,6 +328,18 @@ export default function InvoicesPage() {
               <DatePicker value={draftTo} onChange={setDraftTo} />
             </Field>
           </div>
+          <div className="flex-1 min-w-[200px]">
+            <Field label="Search" hint="Invoice number or customer name.">
+              <input
+                type="search"
+                className="input w-full"
+                placeholder="e.g. DEMO-STD-005 or Falcon…"
+                value={draftQ}
+                onChange={(e) => setDraftQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }}
+              />
+            </Field>
+          </div>
           <div className="flex flex-col gap-1">
             <span className="text-xs font-medium text-transparent select-none" aria-hidden>·</span>
             <div className="flex gap-2">
@@ -243,12 +353,14 @@ export default function InvoicesPage() {
             {statuses.length > 0 && `${statuses.length} status${statuses.length === 1 ? "" : "es"}`}
             {(statuses.length > 0 && (dateFrom || dateTo)) && " · "}
             {(dateFrom || dateTo) && `${dateFrom || "…"} → ${dateTo || "…"}`}
+            {((statuses.length > 0 || dateFrom || dateTo) && q) && " · "}
+            {q && `“${q}”`}
             {" applied"}
           </div>
         )}
       </Card>
 
-      {loading && !data ? (
+      {loading && !invMeta.loaded ? (
         <p className="muted">Loading…</p>
       ) : items.length === 0 ? (
         <Empty
@@ -265,10 +377,39 @@ export default function InvoicesPage() {
         />
       ) : (
         <>
+          {selectedCount > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-soft)] px-3 py-2">
+              <span className="text-sm font-medium">
+                {selectedCount} draft{selectedCount === 1 ? "" : "s"} selected
+              </span>
+              <div className="flex gap-2 ml-auto">
+                <button type="button" className="btn btn-default" disabled={bulkBusy} onClick={bulkMoveToQueue}
+                  title="Move the selected drafts into the queue (released on schedule or via 'Process queue now').">
+                  {bulkBusy ? "Working…" : `Move ${selectedCount} to queue`}
+                </button>
+                <button type="button" className="btn btn-primary" disabled={bulkBusy} onClick={bulkSubmit}
+                  title="Submit the selected drafts to ZATCA now. Runs in the background; you'll get a single summary.">
+                  {bulkBusy ? "Working…" : `Submit ${selectedCount} now`}
+                </button>
+                <button type="button" className="btn btn-default" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
           <Card>
             <table className="responsive-table">
               <thead>
                 <tr>
+                  <th className="w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all drafts on this page"
+                      checked={allDraftsSelected}
+                      disabled={draftIds.length === 0}
+                      onChange={(e) => toggleAllDrafts(e.target.checked)}
+                    />
+                  </th>
                   <th>ICV</th>
                   <th>Invoice #</th>
                   <th>Customer</th>
@@ -283,6 +424,16 @@ export default function InvoicesPage() {
                 {items.map((r) => (
                   <tr key={r.id}
                     className={`hover:bg-[var(--color-bg-hover)] transition-colors ${pulse.has(r.id) ? "bg-[var(--color-warning-soft)]" : ""}`}>
+                    <td data-label="" className="w-8">
+                      {r.status === "draft" ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select draft ICV ${r.icv}`}
+                          checked={selected.has(r.id)}
+                          onChange={(e) => toggleOne(r.id, e.target.checked)}
+                        />
+                      ) : null}
+                    </td>
                     <td data-label="ICV" className="font-mono">{r.icv}</td>
                     <td data-label="Invoice #">{r.invoice_number ?? `—`}</td>
                     <td data-label="Customer" className="text-[var(--color-fg-2)]">{r.customer_name ?? "—"}</td>
@@ -339,7 +490,12 @@ function RowActions({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const canEdit = (item.status === "cleared" || item.status === "reported") && !item.doc_type.includes("_note");
+  const issued = item.status === "cleared" || item.status === "reported";
+  // Issued invoices are immutable at ZATCA → amend with a credit/debit note.
+  const canAmend = issued && !item.doc_type.includes("_note");
+  // Not-yet-issued invoices can be edited in place (re-signed).
+  const EDITABLE = ["draft", "queued", "retrying", "rejected", "failed_pending_review", "local_only"];
+  const canEditInPlace = EDITABLE.includes(item.status);
   const canRelease = item.status === "queued" || item.status === "retrying";
   const canRetry = item.status === "rejected" || item.status === "failed_pending_review";
   const isDraft = item.status === "draft";
@@ -395,30 +551,30 @@ function RowActions({
             </button>
           )}
           {canRetry && (
-            <>
-              <button
-                type="button"
-                onClick={() => { setOpen(false); onRetry(item.id); }}
-                className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
-              >
-                Retry (re-sign + resubmit)
-              </button>
-              <Link
-                href={`/dashboard/invoices/new?from=${item.id}`}
-                onClick={() => setOpen(false)}
-                className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
-              >
-                Edit & resubmit (new invoice)
-              </Link>
-            </>
+            <button
+              type="button"
+              onClick={() => { setOpen(false); onRetry(item.id); }}
+              className="w-full text-left block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+            >
+              Retry (re-sign + resubmit)
+            </button>
           )}
-          {canEdit && (
+          {canEditInPlace && (
             <Link
-              href={`/dashboard/invoices/${item.id}/amend`}
+              href={`/dashboard/invoices/new?edit=${item.id}`}
               onClick={() => setOpen(false)}
               className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
             >
-              Edit (issue CN/DN)
+              Edit invoice
+            </Link>
+          )}
+          {canAmend && (
+            <Link
+              href={`/dashboard/invoices/new?amend=${item.id}`}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)]"
+            >
+              Amend (credit / debit note)
             </Link>
           )}
         </div>

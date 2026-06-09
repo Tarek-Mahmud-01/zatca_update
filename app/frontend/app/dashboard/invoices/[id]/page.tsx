@@ -100,6 +100,7 @@ export default function InvoiceDetailPage() {
   const totals = p.monetary_totals;
   const subs = p.tax_subtotals ?? [];
   const hasError = !!inv.last_error || inv.status === "rejected" || inv.status.startsWith("failed");
+  const zatca = parseZatcaError(inv.last_error);
 
   return (
     <div>
@@ -121,35 +122,45 @@ export default function InvoiceDetailPage() {
           </span>
         }
         description={<span>{inv.doc_type} · ICV <span className="font-mono">{inv.icv}</span></span>}
-        actions={
-          (inv.status === "rejected" || inv.status === "failed_pending_review") ? (
-            <button
-              className="btn btn-primary"
-              disabled={retrying}
-              onClick={async () => {
-                const token = getToken();
-                if (!token) return;
-                setRetrying(true);
-                try {
-                  await api.retryInvoice(token, inv.id);
-                  // Backend pushes the status change via SSE — NotificationFeed
-                  // shows the toast. We just refresh this page's data.
-                  window.location.reload();
-                } catch (e) {
-                  // Local failure (network) — backend never got a chance to signal.
-                  pushNotification({ tone: "danger", title: "Retry failed", body: String(e) });
-                } finally { setRetrying(false); }
-              }}
-            >
-              {retrying ? "Retrying…" : "Retry (re-sign + resubmit)"}
-            </button>
-          ) : (inv.status === "cleared" || inv.status === "reported") &&
-          !inv.doc_type.includes("_note") ? (
-            <button className="btn btn-primary" onClick={() => setAmendOpen(true)}>
-              Amend (issue credit / debit note)
-            </button>
-          ) : null
-        }
+        actions={(() => {
+          const EDITABLE = ["draft", "queued", "retrying", "rejected", "failed_pending_review", "local_only"];
+          const isEditable = EDITABLE.includes(inv.status);
+          const canAmend = (inv.status === "cleared" || inv.status === "reported") && !inv.doc_type.includes("_note");
+          const canRetry = inv.status === "rejected" || inv.status === "failed_pending_review";
+          return (
+            <div className="flex gap-2 flex-wrap">
+              {isEditable && (
+                <Link href={`/dashboard/invoices/new?edit=${inv.id}`} className="btn btn-primary">
+                  Edit invoice
+                </Link>
+              )}
+              {canRetry && (
+                <button
+                  className="btn btn-default"
+                  disabled={retrying}
+                  onClick={async () => {
+                    const token = getToken();
+                    if (!token) return;
+                    setRetrying(true);
+                    try {
+                      await api.retryInvoice(token, inv.id);
+                      window.location.reload();
+                    } catch (e) {
+                      pushNotification({ tone: "danger", title: "Retry failed", body: String(e) });
+                    } finally { setRetrying(false); }
+                  }}
+                >
+                  {retrying ? "Retrying…" : "Retry (re-sign)"}
+                </button>
+              )}
+              {canAmend && (
+                <Link href={`/dashboard/invoices/new?amend=${inv.id}`} className="btn btn-primary">
+                  Amend (credit / debit note)
+                </Link>
+              )}
+            </div>
+          );
+        })()}
       />
 
       {inv.status === "local_only" && (
@@ -159,6 +170,26 @@ export default function InvoiceDetailPage() {
             This invoice was signed with a development certificate. ZATCA can&apos;t
             validate it because the cert isn&apos;t in their chain of trust.
             Complete the onboarding wizard (CSR → CCSID → PCSID) before submitting real invoices.
+          </Banner>
+        </div>
+      )}
+
+      {(inv.status === "rejected" || inv.status.startsWith("failed")) && zatca.errors.length > 0 && (
+        <div className="mb-4">
+          <Banner tone="danger">
+            <strong>ZATCA rejected this {inv.doc_type.includes("_note") ? "note" : "invoice"}.</strong>
+            <ul className="mt-1.5 list-disc pl-5 space-y-1">
+              {zatca.errors.map((m, i) => (
+                <li key={i}>
+                  {m.code && <span className="font-mono text-xs mr-1.5">[{m.code}]</span>}
+                  {m.message}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 text-xs opacity-80">
+              Fix the issue, then use <strong>Edit invoice</strong> to correct and resubmit.
+              {zatca.errors.some((m) => m.code === "BR-KSA-17") && " This note needs a reason for issuance."}
+            </div>
           </Banner>
         </div>
       )}
@@ -383,10 +414,31 @@ export default function InvoiceDetailPage() {
       )}
 
       {tab === "error" && hasError && (
-        <Card title="Last error">
-          <pre className="whitespace-pre-wrap text-xs text-[var(--color-fg-2)] bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-md p-3">
-            {inv.last_error ?? "(no message)"}
-          </pre>
+        <Card title="ZATCA validation result" description="Errors block clearance/reporting; warnings don't.">
+          {zatca.errors.length === 0 && zatca.warnings.length === 0 ? (
+            <pre className="whitespace-pre-wrap text-xs text-[var(--color-fg-2)] bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-md p-3">
+              {inv.last_error ?? "(no message)"}
+            </pre>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {zatca.errors.length > 0 && (
+                <ZatcaMsgList title={`Errors (${zatca.errors.length})`} tone="danger" items={zatca.errors} />
+              )}
+              {zatca.warnings.length > 0 && (
+                <ZatcaMsgList title={`Warnings (${zatca.warnings.length})`} tone="warning" items={zatca.warnings} />
+              )}
+              {zatca.raw && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]">
+                    Raw response
+                  </summary>
+                  <pre className="mt-2 whitespace-pre-wrap text-[11px] text-[var(--color-fg-2)] bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-md p-3 max-h-[50vh] overflow-auto">
+                    {zatca.raw}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
@@ -519,6 +571,43 @@ function AmendDialog({
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+interface ZatcaMsg { code?: string; message: string; category?: string; type?: string; status?: string }
+
+/** Pull ZATCA's error/warning messages out of the stored last_error JSON.
+ *  Falls back to empty lists (and keeps the raw text) for non-JSON errors. */
+function parseZatcaError(raw: string | null): { errors: ZatcaMsg[]; warnings: ZatcaMsg[]; raw: string | null } {
+  if (!raw) return { errors: [], warnings: [], raw };
+  try {
+    const j = JSON.parse(raw);
+    const vr = j.validationResults ?? j;
+    const errors = Array.isArray(vr.errorMessages) ? (vr.errorMessages as ZatcaMsg[]) : [];
+    const warnings = Array.isArray(vr.warningMessages) ? (vr.warningMessages as ZatcaMsg[]) : [];
+    return { errors, warnings, raw };
+  } catch {
+    return { errors: [], warnings: [], raw };
+  }
+}
+
+function ZatcaMsgList({ title, tone, items }: { title: string; tone: "danger" | "warning"; items: ZatcaMsg[] }) {
+  const color = tone === "danger" ? "var(--color-danger)" : "var(--color-warning)";
+  return (
+    <div>
+      <div className="text-sm font-semibold mb-2" style={{ color }}>{title}</div>
+      <ul className="flex flex-col gap-2">
+        {items.map((m, i) => (
+          <li key={i} className="text-sm border-l-2 pl-3" style={{ borderColor: color }}>
+            <div className="flex items-center gap-2 flex-wrap">
+              {m.code && <span className="badge badge-neutral font-mono text-[11px]">{m.code}</span>}
+              {m.category && <span className="text-[11px] text-[var(--color-fg-muted)]">{m.category}</span>}
+            </div>
+            <div className="text-[var(--color-fg-2)] mt-0.5">{m.message}</div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

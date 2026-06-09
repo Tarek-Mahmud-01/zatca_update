@@ -3,7 +3,8 @@
 import { useEffect } from "react";
 import { api, type InvoiceEvent } from "../lib/api-client";
 import { getToken, handleAuthExpired } from "../lib/token";
-import { pushNotification, type Tone } from "../lib/notifications";
+import { pushNotification, shouldSuppressQueued, type Tone } from "../lib/notifications";
+import { handleBatchEvent } from "../lib/batch-tracker";
 
 const TONE_BY_TYPE: Record<string, Tone> = {
   "invoice.queued":   "info",
@@ -63,6 +64,12 @@ export function NotificationFeed() {
     function handle(ev: MessageEvent) {
       let data: InvoiceEvent;
       try { data = JSON.parse(ev.data) as InvoiceEvent; } catch { return; }
+      // A bulk-submit batch owns this invoice → tally it into the single
+      // summary notification instead of toasting per invoice.
+      if (handleBatchEvent(data.invoice_id, data.type)) return;
+      // Skip the queued echo of a submit the user just made on this tab — the
+      // local "saved to queue" toast already covered it.
+      if (data.type === "invoice.queued" && shouldSuppressQueued(data.invoice_id)) return;
       const tone = TONE_BY_TYPE[data.type] ?? "info";
       const title = TITLE_BY_TYPE[data.type] ?? data.type;
       const body =

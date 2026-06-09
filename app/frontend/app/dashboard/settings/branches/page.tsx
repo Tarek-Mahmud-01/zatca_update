@@ -12,11 +12,13 @@ import { getToken } from "../../../../lib/token";
 import { Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { SearchSelect } from "../../../../components/SearchSelect";
 import { pushNotification } from "../../../../lib/notifications";
+import { useAppDispatch, useBranches, useOrganizations, branches as branchesSlice } from "../../../../lib/store";
 
 export default function BranchesSettingsPage() {
+  const dispatch = useAppDispatch();
+  const { items: branches, refetch: refetchBranches } = useBranches();
+  const { items: organizations } = useOrganizations();
   const [me, setMe] = useState<Me | null>(null);
-  const [branches, setBranches] = useState<TenantBranch[]>([]);
-  const [organizations, setOrganizations] = useState<TenantOrganization[]>([]);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -30,45 +32,31 @@ export default function BranchesSettingsPage() {
   );
   const noOrgs = organizations.length === 0;
 
-  async function refresh() {
+  // Branches + organizations come from the store; load the user for admin gate.
+  useEffect(() => {
     const token = getToken();
     if (!token) return;
-    try {
-      const [m, brs, orgs] = await Promise.all([
-        api.me(token),
-        api.listBranches(token),
-        api.listOrganizations(token),
-      ]);
-      setMe(m);
-      setBranches(brs);
-      setOrganizations(orgs);
-    } catch (e) {
-      pushNotification({ tone: "danger", title: "Couldn't load branches", body: String(e) });
-    }
-  }
-  useEffect(() => { refresh(); }, []);
+    api.me(token).then(setMe).catch((e) =>
+      pushNotification({ tone: "danger", title: "Couldn't load profile", body: String(e) }));
+  }, []);
 
   async function create(v: Partial<TenantBranch> & { organization_id: string }) {
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.createBranch(token, v);
+      await dispatch(branchesSlice.thunks.createOne(v)).unwrap();
       setAdding(false);
-      await refresh();
+      if (v.is_default) refetchBranches();  // default flips a sibling server-side
     } catch (e) {
       pushNotification({ tone: "danger", title: "Create branch failed", body: String(e) });
     } finally { setBusy(false); }
   }
 
   async function update(id: string, v: Partial<TenantBranch> & { organization_id: string }) {
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.updateBranch(token, id, v);
+      await dispatch(branchesSlice.thunks.updateOne({ id, body: v })).unwrap();
       setEditingId(null);
-      await refresh();
+      if (v.is_default) refetchBranches();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Update branch failed", body: String(e) });
     } finally { setBusy(false); }
@@ -76,12 +64,9 @@ export default function BranchesSettingsPage() {
 
   async function remove(b: TenantBranch) {
     if (!confirm(`Remove branch "${b.name}"?`)) return;
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
     try {
-      await api.deleteBranch(token, b.id);
-      await refresh();
+      await dispatch(branchesSlice.thunks.deleteOne(b.id)).unwrap();
     } catch (e) {
       pushNotification({ tone: "danger", title: "Delete failed", body: String(e) });
     } finally { setBusy(false); }

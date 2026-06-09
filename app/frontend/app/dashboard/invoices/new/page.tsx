@@ -18,7 +18,7 @@ import { EnvBadge } from "../../../../components/EnvSwitcher";
 import { Banner, Card, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
 import { DatePicker } from "../../../../components/DatePicker";
 import { SearchSelect } from "../../../../components/SearchSelect";
-import { pushNotification } from "../../../../lib/notifications";
+import { pushNotification, suppressQueuedEcho } from "../../../../lib/notifications";
 import { PAYMENT_METHODS, VAT_BY_CODE, VAT_CATEGORIES } from "../../../../lib/catalog";
 
 const DOC_TYPES = [
@@ -48,26 +48,35 @@ interface LineForm {
   unit_price: string;
   vat_code: "S" | "Z" | "E" | "O" | "G";
   vat_percent: string;
-  discount_amount: string;
+  discount_value: string;                 // raw entered value (percent or amount)
+  discount_mode: "amount" | "percent";    // how discount_value is interpreted
 }
 
 function round2(n: number): number { return Math.round(n * 100) / 100; }
 
+/** The absolute discount amount for a line, resolving percent vs amount mode. */
+function lineDiscountAmount(l: LineForm): number {
+  const gross = Number(l.quantity || 0) * Number(l.unit_price || 0);
+  const v = Math.max(0, Number(l.discount_value || 0));
+  if (l.discount_mode === "percent") return round2(Math.min(100, v) / 100 * gross);
+  return round2(Math.min(v, gross));
+}
+
 function computeLine(l: LineForm) {
   const qty = Number(l.quantity || 0);
   const price = Number(l.unit_price || 0);
-  const disc = Number(l.discount_amount || 0);
+  const disc = lineDiscountAmount(l);
   const percent = Number(l.vat_percent || 0);
   const lineExt = round2(qty * price - disc);
   const tax = round2((lineExt * percent) / 100);
-  return { lineExt, tax, rounding: round2(lineExt + tax), percent };
+  return { lineExt, tax, rounding: round2(lineExt + tax), percent, discount: disc };
 }
 
 function newLine(n: number): LineForm {
   return {
     id: String(n), product_id: "", sku: "", name: "",
     quantity: "1", unit_code: "PCE", unit_price: "0.00",
-    vat_code: "S", vat_percent: "15", discount_amount: "0",
+    vat_code: "S", vat_percent: "15", discount_value: "0", discount_mode: "amount",
   };
 }
 
@@ -81,6 +90,7 @@ export default function NewInvoicePage() {
   const [issueDate, setIssueDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState("10");
   const [billingRefId, setBillingRefId] = useState("");
+  const [instructionCode, setInstructionCode] = useState("");
   const [instructionNote, setInstructionNote] = useState("");
 
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -126,6 +136,15 @@ export default function NewInvoicePage() {
   // Logged-in user's preferred branch (from /me.default_branch_id). Beats
   // the tenant-wide default branch when picking the initial selection.
   const [userDefaultBranchId, setUserDefaultBranchId] = useState<string | null>(null);
+
+  // Editor mode, driven by the URL:
+  //   ?edit=<id>  → in-place edit of a NOT-yet-issued invoice (replace same row)
+  //   ?amend=<id> → issued invoice → compose a credit/debit note referencing it
+  //   ?from=<id>  → legacy: prefill from a rejected invoice, create a NEW one
+  //   (none)      → blank new invoice
+  const [pageMode, setPageMode] = useState<"new" | "edit" | "amend">("new");
+  const [editInvoiceId, setEditInvoiceId] = useState<string | null>(null);
+  const [amendSourcePayable, setAmendSourcePayable] = useState<number | null>(null);
 
   // ------ load catalog + tenant queue config ------
   useEffect(() => {
@@ -180,19 +199,53 @@ export default function NewInvoicePage() {
   // got it rejected and submit fresh (new ICV, new UUID). Original stays
   // rejected for audit; this creates a new invoice document.
   const searchParams = useSearchParams();
+  const editId = searchParams.get("edit");
+  const amendId = searchParams.get("amend");
   const fromId = searchParams.get("from");
+  const sourceId = editId || amendId || fromId;
+  const mode: "edit" | "amend" | "from" | null =
+    editId ? "edit" : amendId ? "amend" : fromId ? "from" : null;
+
   useEffect(() => {
-    if (!fromId) return;
+    if (!sourceId || !mode) return;
     const token = getToken();
     if (!token) return;
-    api.getInvoice(token, fromId).then((src) => {
+    api.getInvoice(token, sourceId).then((src) => {
       const p = (src.payload_json ?? {}) as Record<string, unknown>;
-      if (typeof p.doc_type === "string") setDocType(p.doc_type as DocType);
-      if (typeof p.invoice_number === "string") {
-        setInvoiceNumber(`${p.invoice_number}-FIX`);
+      const family = String(p.doc_type ?? "simplified_invoice").startsWith("standard")
+        ? "standard" : "simplified";
+
+      // doc_type + invoice number depend on the mode.
+      if (mode === "amend") {
+        // Issued invoice → start from a credit note (reduction is the common
+        // case). The user can flip to a debit note; we also auto-pick on submit
+        // based on whether the new total is below/above the original.
+        setDocType(`${family}_credit_note` as DocType);
+        setInvoiceNumber(`${String(p.invoice_number ?? src.icv)}-N`);
+        setBillingRefId(String(p.invoice_number ?? src.icv));
+        // ZATCA BR-KSA-17 requires a reason on credit/debit notes — seed one.
+        setInstructionNote(`Amendment to ${String(p.invoice_number ?? src.icv)}`);
+        const prevPayable = Number((p.monetary_totals as Record<string, unknown> | undefined)?.payable_amount ?? 0);
+        setAmendSourcePayable(prevPayable || null);
+      } else if (mode === "edit") {
+        if (typeof p.doc_type === "string") setDocType(p.doc_type as DocType);
+        if (typeof p.invoice_number === "string") setInvoiceNumber(p.invoice_number);
+        setEditInvoiceId(src.id);
+      } else { // "from" — create a new invoice from a rejected one
+        if (typeof p.doc_type === "string") setDocType(p.doc_type as DocType);
+        if (typeof p.invoice_number === "string") setInvoiceNumber(`${p.invoice_number}-FIX`);
       }
+      setPageMode(mode === "from" ? "new" : mode);
+
       if (typeof p.issue_date === "string") setIssueDate(p.issue_date);
       if (typeof p.payment_means_code === "string") setPaymentMethod(p.payment_means_code);
+      // Carry over an existing note's reason (code + description) and reference
+      // when editing/fixing it, so the user doesn't have to retype them.
+      if (mode !== "amend") {
+        if (typeof p.billing_reference_id === "string") setBillingRefId(p.billing_reference_id);
+        if (typeof p.instruction_code === "string") setInstructionCode(p.instruction_code);
+        if (typeof p.instruction_note === "string") setInstructionNote(p.instruction_note);
+      }
       const lns = Array.isArray(p.lines) ? (p.lines as Array<Record<string, unknown>>) : [];
       if (lns.length > 0) {
         setLines(lns.map((l, i) => ({
@@ -205,16 +258,14 @@ export default function NewInvoicePage() {
           unit_price: String(l.unit_price ?? "0.00"),
           vat_code: ((l.tax_category as LineForm["vat_code"]) ?? "S"),
           vat_percent: String(l.tax_percent ?? "15"),
-          discount_amount: String(l.discount_amount ?? "0"),
+          discount_value: String(l.discount_amount ?? "0"),
+          discount_mode: "amount" as const,
         })));
       }
-      pushNotification({
-        tone: "info",
-        title: "Pre-filled from rejected invoice",
-        body: `Edit and resubmit. Original ICV ${src.icv} stays rejected for audit.`,
-      });
+      // No toast here — the page title ("Edit invoice" / "Amend") already makes
+      // the mode obvious, and the effect can run twice in dev (React strict mode).
     }).catch(() => {/* silent — user can still create from scratch */});
-  }, [fromId]);
+  }, [sourceId, mode]);
 
   // Apply user's default branch as soon as both /me and the branch list are loaded.
   useEffect(() => {
@@ -308,6 +359,17 @@ export default function NewInvoicePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refSearch, isNote]);
 
+  // Auto-link the reference invoice for a note from its own number: a note
+  // numbered "INV-142797-CN" (or -DN) almost always references "INV-142797".
+  // Only fills when the reference is still empty so it never fights the user or
+  // a value loaded via the search picker / amend flow.
+  useEffect(() => {
+    if (!isNote || billingRefId.trim()) return;
+    const m = invoiceNumber.match(/^(.+?)[-_\s]*(CN|DN)$/i);
+    if (m && m[1].trim()) setBillingRefId(m[1].trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNote, invoiceNumber]);
+
   async function pickReferenceInvoice(id: string) {
     const token = getToken();
     if (!token) return;
@@ -339,7 +401,8 @@ export default function NewInvoicePage() {
           unit_price: l.unit_price ?? "0.00",
           vat_code: l.tax_category ?? "S",
           vat_percent: l.tax_percent ?? "15",
-          discount_amount: l.discount_amount ?? "0",
+          discount_value: l.discount_amount ?? "0",
+          discount_mode: "amount" as const,
         })));
       }
       setRefSearch("");
@@ -397,17 +460,63 @@ export default function NewInvoicePage() {
   function addBlankLine() { setLines((p) => [...p, newLine(p.length + 1)]); }
   function removeLine(idx: number) { setLines((p) => p.filter((_, i) => i !== idx)); }
 
+  // ------ required-field validation ------
+  // Single source of truth for "what must be filled before we can advance /
+  // submit", keyed to the tab + DOM id of the offending control so we can jump
+  // there and focus it.
+  type MissingField = { tab: TabId; fieldId: string; label: string };
+  function collectMissing(): MissingField[] {
+    const m: MissingField[] = [];
+    if (!invoiceNumber.trim())
+      m.push({ tab: "details", fieldId: "f-invoice-number", label: "Invoice number" });
+    if (branchList.length > 0 && !selectedBranchId)
+      m.push({ tab: "details", fieldId: "f-branch", label: "Branch" });
+    if (needsBillingRef && !billingRefId.trim())
+      m.push({ tab: "details", fieldId: "f-ref", label: "Reference invoice" });
+    if (needsBillingRef && !instructionCode.trim() && !instructionNote.trim())
+      m.push({ tab: "details", fieldId: "f-reason", label: "Reason (code or description)" });
+    if (!isB2C && !customerId)
+      m.push({ tab: "details", fieldId: "f-customer", label: "Customer" });
+    const validLines = lines.filter((l) => l.name.trim() && Number(l.quantity) > 0);
+    if (validLines.length === 0)
+      m.push({ tab: "lines", fieldId: "f-lines", label: "At least one line item (name + quantity)" });
+    return m;
+  }
+
+  function focusMissing(fieldId: string) {
+    // Wait a tick for the target tab to render before focusing/scrolling.
+    setTimeout(() => {
+      const el = document.getElementById(fieldId);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      (el as HTMLElement).focus?.();
+    }, 60);
+  }
+
+  // Forward navigation guard: block "Next" until the CURRENT tab's required
+  // fields are filled, and focus the first offender.
+  function goNext(target: TabId) {
+    const here = collectMissing().filter((x) => x.tab === tab);
+    if (here.length > 0) {
+      setError(`Please complete: ${here.map((x) => x.label).join(", ")}`);
+      focusMissing(here[0].fieldId);
+      return;
+    }
+    setError(null);
+    setTab(target);
+  }
+
   // ------ submit ------
   async function submit(submitMode: "immediate" | "queued" | "draft") {
     const token = getToken();
     if (!token) return;
-    // Branch is required when any branch is configured on the tenant.
-    if (branchList.length > 0 && !selectedBranchId) {
-      pushNotification({
-        tone: "danger", title: "Branch is required",
-        body: "Pick a branch on the Details tab before submitting.",
-      });
-      setTab("details");
+    // Final check: every required field across all tabs. Jump to the first
+    // missing one and focus it instead of letting the request fail.
+    const missing = collectMissing();
+    if (missing.length > 0) {
+      setError(`Missing required: ${missing.map((x) => x.label).join(", ")}`);
+      setTab(missing[0].tab);
+      focusMissing(missing[0].fieldId);
       return;
     }
     setBusy(true);
@@ -470,8 +579,19 @@ export default function NewInvoicePage() {
         country_code: (addr && addr.country_code) || "SA",
       };
 
+      // In amend mode the note kind is auto-picked from the new total vs the
+      // original: lower → credit note (reduction), higher → debit note (charge).
+      let effectiveDocType: DocType = docType;
+      if (pageMode === "amend" && amendSourcePayable != null) {
+        const family = docType.startsWith("standard") ? "standard" : "simplified";
+        effectiveDocType = (payable < amendSourcePayable
+          ? `${family}_credit_note`
+          : `${family}_debit_note`) as DocType;
+      }
+      const effNeedsRef = effectiveDocType.endsWith("credit_note") || effectiveDocType.endsWith("debit_note");
+
       const payload = {
-        doc_type: docType,
+        doc_type: effectiveDocType,
         invoice_number: invoiceNumber,
         uuid: "00000000-0000-0000-0000-000000000000",
         issue_date: issueDate,
@@ -507,8 +627,10 @@ export default function NewInvoicePage() {
             tax_amount: c.tax.toFixed(2),
             rounding_amount: c.rounding.toFixed(2),
             tax_category: l.vat_code, tax_percent: l.vat_percent,
-            discount_amount: l.discount_amount || "0",
-            discount_reason: Number(l.discount_amount) > 0 ? "discount" : null,
+            // Always send the resolved absolute discount amount (percent mode
+            // is a UI convenience; the wire format is the SAR amount).
+            discount_amount: c.discount.toFixed(2),
+            discount_reason: c.discount > 0 ? "discount" : null,
           };
         }),
         tax_subtotals: [...subtotals.values()].map((s) => ({
@@ -547,21 +669,34 @@ export default function NewInvoicePage() {
           });
         })(),
         payment_means_code: paymentMethod,
-        instruction_note:    needsBillingRef ? (instructionNote || null) : null,
-        billing_reference_id: needsBillingRef ? (billingRefId   || null) : null,
+        instruction_code:    effNeedsRef ? (instructionCode || null) : null,
+        instruction_note:    effNeedsRef ? (instructionNote || null) : null,
+        billing_reference_id: effNeedsRef ? (billingRefId   || null) : null,
         notes: supplierNotes,
       };
       if (!payload.customer) throw new Error("Pick a customer (or use a simplified doc type for walk-in).");
-      const res = await api.submitInvoice(token, { env, payload, submit_mode: submitMode });
+      // Edit mode replaces the SAME not-yet-issued invoice in place; everything
+      // else (new / amend / from-rejected) creates a fresh document.
+      const res = pageMode === "edit" && editInvoiceId
+        ? await api.replaceInvoice(token, editInvoiceId, payload, submitMode)
+        : await api.submitInvoice(token, { env, payload, submit_mode: submitMode });
       const appliedMode = res.submit_mode ?? submitMode;
+      const verb = pageMode === "edit" ? "Invoice updated" : pageMode === "amend" ? "Note issued" : "Invoice";
       const title =
-        appliedMode === "draft"   ? "Saved as draft"
-        : appliedMode === "queued" ? "Invoice saved to queue"
+        appliedMode === "draft"   ? (pageMode === "edit" ? "Saved (draft)" : "Saved as draft")
+        : appliedMode === "queued" ? `${verb} — queued`
+        : pageMode === "edit"     ? "Invoice updated & submitted"
+        : pageMode === "amend"    ? `Note submitted to ${env}`
         : `Invoice submitted to ${env}`;
+      // Queued submits also emit an SSE `invoice.queued` for the tenant; this
+      // toast already covers it for the initiator, so suppress that echo here.
+      // (Immediate submits no longer emit a queued event — the terminal
+      // reported/cleared event arrives over SSE as the result notification.)
+      if (appliedMode === "queued") suppressQueuedEcho(res.id);
       pushNotification({
         tone: appliedMode === "immediate" ? "success" : "info",
         title,
-        body: `ICV ${res.icv} · status ${res.status}`,
+        body: `ICV ${res.icv}`,
         href: `/dashboard/invoices/${res.id}`,
       });
       router.push(`/dashboard/invoices/${res.id}`);
@@ -585,7 +720,16 @@ export default function NewInvoicePage() {
       </Link>
 
       <PageHeader
-        title="New invoice"
+        title={
+          pageMode === "edit" ? "Edit invoice"
+          : pageMode === "amend" ? "Amend — credit / debit note"
+          : "New invoice"
+        }
+        description={
+          pageMode === "edit" ? "Editing a not-yet-issued invoice in place. Add or remove lines, change amounts."
+          : pageMode === "amend" ? "Compose the note referencing the original. Credit vs debit is auto-picked from the new total."
+          : undefined
+        }
         actions={<EnvBadge />}
       />
 
@@ -615,7 +759,7 @@ export default function NewInvoicePage() {
                 />
               </Field>
               <Field label="Invoice number" required>
-                <input className="input" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} required />
+                <input id="f-invoice-number" className="input" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} required />
               </Field>
               <Field label="Invoice date" required>
                 <DatePicker
@@ -658,6 +802,7 @@ export default function NewInvoicePage() {
                   {showBranch && (
                     <Field label="Branch" required>
                       <SearchSelect
+                        id="f-branch"
                         value={selectedBranchId}
                         onChange={setSelectedBranchId}
                         placeholder="— select branch —"
@@ -692,6 +837,7 @@ export default function NewInvoicePage() {
                 <Field label="Reference invoice" required>
                   <div className="relative">
                     <input
+                      id="f-ref"
                       className="input"
                       placeholder="Search by invoice #, customer or ICV…"
                       value={refSearch || billingRefId}
@@ -724,8 +870,29 @@ export default function NewInvoicePage() {
                   </div>
                 </Field>
 
-                <Field label="Reason / instruction note">
+                <Field label="Reason code" hint="Coded reason — pick a standard one or type your own. Optional.">
                   <input
+                    id="f-reason-code"
+                    className="input"
+                    list="cn-dn-reason-codes"
+                    value={instructionCode}
+                    onChange={(e) => setInstructionCode(e.target.value)}
+                    placeholder="e.g. CANCELLATION_OR_TERMINATION"
+                  />
+                  <datalist id="cn-dn-reason-codes">
+                    <option value="CANCELLATION_OR_TERMINATION" />
+                    <option value="GOODS_OR_SERVICES_RETURN" />
+                    <option value="PRICE_ADJUSTMENT" />
+                    <option value="QUANTITY_CORRECTION" />
+                    <option value="BILLING_ERROR" />
+                    <option value="DISCOUNT_APPLIED_LATE" />
+                    <option value="ADDITIONAL_CHARGE" />
+                  </datalist>
+                </Field>
+
+                <Field label="Reason / description" required hint="Code and/or description — at least one is required by ZATCA (BR-KSA-17).">
+                  <input
+                    id="f-reason"
                     className="input"
                     list="cn-dn-reasons"
                     value={instructionNote}
@@ -764,8 +931,9 @@ export default function NewInvoicePage() {
 
           <Card title="Customer">
             <FieldGrid cols={1}>
-              <Field label="Pick customer">
+              <Field label="Pick customer" required={!isB2C}>
                 <SearchSelect
+                  id="f-customer"
                   value={customerId}
                   onChange={setCustomerId}
                   placeholder={`— ${isB2C ? "Walk-in customer" : "Select a customer"} —`}
@@ -787,7 +955,7 @@ export default function NewInvoicePage() {
           </Card>
 
           <div className="flex justify-end">
-            <button className="btn btn-primary" onClick={() => setTab("lines")}>Next: line items →</button>
+            <button className="btn btn-primary" onClick={() => goNext("lines")}>Next: line items →</button>
           </div>
         </div>
       )}
@@ -798,7 +966,7 @@ export default function NewInvoicePage() {
           <Card
             title="Line items"
             actions={
-              <button type="button" onClick={addBlankLine} className="btn btn-default !py-1 !px-2 text-xs">+ Add line</button>
+              <button id="f-lines" type="button" onClick={addBlankLine} className="btn btn-default !py-1 !px-2 text-xs">+ Add line</button>
             }
           >
             {lines.length === 0 ? (
@@ -841,19 +1009,38 @@ export default function NewInvoicePage() {
                       </div>
                       <div className="md:col-span-2">
                         <div className="label mb-1">Discount</div>
-                        <input className="input tabular-nums" inputMode="decimal" value={l.discount_amount} onChange={(e) => updateLine(i, { discount_amount: e.target.value })} />
+                        <div className="flex">
+                          <input
+                            className="input tabular-nums rounded-r-none"
+                            inputMode="decimal"
+                            value={l.discount_value}
+                            onChange={(e) => updateLine(i, { discount_value: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            title="Toggle percent / amount"
+                            onClick={() => updateLine(i, { discount_mode: l.discount_mode === "amount" ? "percent" : "amount" })}
+                            className="px-2 border border-l-0 border-[var(--color-border)] rounded-r-md text-xs font-medium bg-white text-[var(--color-fg-2)] hover:bg-[var(--color-bg-hover)] shrink-0"
+                          >
+                            {l.discount_mode === "percent" ? "%" : "SAR"}
+                          </button>
+                        </div>
                       </div>
                       <div className="md:col-span-2">
                         <div className="label mb-1">VAT</div>
-                        <SearchSelect
+                        <select
+                          className="input"
                           value={l.vat_code}
-                          onChange={(code) => {
-                            const cat = VAT_BY_CODE[code as LineForm["vat_code"]];
-                            updateLine(i, { vat_code: code as LineForm["vat_code"], vat_percent: String(cat?.defaultPercent ?? 15) });
+                          onChange={(e) => {
+                            const code = e.target.value as LineForm["vat_code"];
+                            const cat = VAT_BY_CODE[code];
+                            updateLine(i, { vat_code: code, vat_percent: String(cat?.defaultPercent ?? 15) });
                           }}
-                          options={VAT_CATEGORIES.map((v) => ({ value: v.code, label: `${v.code} · ${v.defaultPercent}%` }))}
-                          searchPlaceholder="Search VAT…"
-                        />
+                        >
+                          {VAT_CATEGORIES.map((v) => (
+                            <option key={v.code} value={v.code}>{v.code} · {v.defaultPercent}%</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="md:col-span-1 flex md:flex-col md:items-end md:justify-end justify-between gap-1">
                         <div className="tabular-nums text-sm font-medium text-[var(--color-fg)]">{(c.lineExt + c.tax).toFixed(2)}</div>
@@ -923,7 +1110,7 @@ export default function NewInvoicePage() {
 
           <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
             <button className="btn btn-default" onClick={() => setTab("details")}>← Back</button>
-            <button className="btn btn-primary" onClick={() => setTab("review")}>Next: review →</button>
+            <button className="btn btn-primary" onClick={() => goNext("review")}>Next: review →</button>
           </div>
         </div>
       )}
@@ -1060,7 +1247,7 @@ export default function NewInvoicePage() {
                             </td>
                             <td className="py-2 text-right tabular-nums">{l.quantity}</td>
                             <td className="py-2 text-right tabular-nums">{Number(l.unit_price).toFixed(2)}</td>
-                            <td className="py-2 text-right tabular-nums text-[var(--color-fg-muted)]">{Number(l.discount_amount).toFixed(2)}</td>
+                            <td className="py-2 text-right tabular-nums text-[var(--color-fg-muted)]">{c.discount.toFixed(2)}</td>
                             <td className="py-2 text-right text-[var(--color-fg-muted)]">{l.vat_code} {l.vat_percent}%</td>
                             <td className="py-2 text-right tabular-nums font-medium">{(c.lineExt + c.tax).toFixed(2)}</td>
                           </tr>
@@ -1124,10 +1311,11 @@ export default function NewInvoicePage() {
                 </div>
               </div>
 
-              {needsBillingRef && instructionNote && (
+              {needsBillingRef && (instructionCode || instructionNote) && (
                 <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
-                  <div className="label mb-1">Instruction note</div>
-                  <div className="text-sm text-[var(--color-fg-2)]">{instructionNote}</div>
+                  <div className="label mb-1">Reason for issuance</div>
+                  {instructionCode && <div className="text-sm font-mono text-[var(--color-fg-2)]">{instructionCode}</div>}
+                  {instructionNote && <div className="text-sm text-[var(--color-fg-2)]">{instructionNote}</div>}
                 </div>
               )}
             </Card>

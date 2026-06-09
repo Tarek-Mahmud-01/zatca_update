@@ -16,9 +16,9 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from arq.connections import RedisSettings, create_pool
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 
 from app.config import ZatcaEnv, get_settings
 from app.db.models import Csid, Invoice, PihChain, Submission
@@ -195,6 +195,35 @@ async def _enqueue(invoice_id: UUID) -> None:
         await db.commit()
 
 
+async def _drain_ids(tenant_id: UUID, invoice_ids: list[UUID]) -> None:
+    """Submit a specific set of queued invoices, one at a time, in the
+    background. Used by the bulk "submit now" action so the HTTP request returns
+    immediately and the client tracks completion via the SSE event stream.
+
+    Each invoice goes through the normal path: arq if reachable (the worker
+    emits its terminal event), otherwise inline submission here. A failure on
+    one invoice (it ends up rejected/failed and emits that event) never stops
+    the rest of the batch.
+    """
+    from app.db.session import SessionLocal
+    async with SessionLocal() as db:
+        for inv_id in invoice_ids:
+            if await _try_enqueue_arq(inv_id):
+                continue
+            inv = await db.scalar(
+                select(Invoice).where(
+                    Invoice.id == inv_id, Invoice.tenant_id == tenant_id
+                )
+            )
+            if inv is None:
+                continue
+            try:
+                await _advance_inline(db, tenant_id, inv)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+
 def _sign_one(
     payload: _InvoiceBase, *, env: str, icv: int, pih: str, tenant_id: UUID, csid: Csid
 ) -> tuple[Invoice, str]:
@@ -283,7 +312,11 @@ async def submit_invoice(
     if idempotency_key:
         await set_idempotent(str(user.tenant_id), idempotency_key, str(inv.id))
 
-    if submit_mode != "draft":
+    # Only announce "queued" when the invoice will genuinely sit in the queue.
+    # Immediate submits transition straight to reported/cleared, so the terminal
+    # event (emitted by the submitter) is the meaningful one — a "queued" event
+    # here is just transient noise that duplicates the client's own submit toast.
+    if submit_mode == "queued":
         await publish(
             user.tenant_id, "invoice.queued",
             invoice_id=str(inv.id), icv=inv.icv, doc_type=inv.doc_type, status=inv.status,
@@ -291,6 +324,96 @@ async def submit_invoice(
 
     return SubmitInvoiceResponse(
         id=inv.id, status=inv.status, invoice_hash=invoice_hash, icv=inv.icv,
+        submit_mode=submit_mode,
+    )
+
+
+# ---------------------------------------------------------------------------
+# replace (edit-in-place) — only for invoices NOT yet accepted by ZATCA.
+# Issued (cleared/reported) invoices are immutable per ZATCA; the caller must
+# amend those via a Credit/Debit Note instead (see the /amend flow + the
+# frontend ?amend= editor mode).
+# ---------------------------------------------------------------------------
+
+_EDITABLE_STATUSES = {"draft", "queued", "retrying", "rejected", "failed_pending_review", "local_only"}
+
+
+class ReplaceInvoiceRequest(BaseModel):
+    payload: InvoicePayload
+    submit_mode: str = "draft"  # "immediate" | "queued" | "draft"
+
+
+@router.put("/{invoice_id}", response_model=SubmitInvoiceResponse)
+async def replace_invoice(
+    invoice_id: UUID,
+    req: ReplaceInvoiceRequest,
+    user: CurrentUserDep,
+    db: DbSession,
+) -> SubmitInvoiceResponse:
+    """Edit a not-yet-issued invoice in place: re-sign the new payload, keeping
+    the SAME ICV / UUID / env / chain slot. Add or remove lines, change amounts
+    — anything. The original row is replaced, not duplicated.
+
+    Rejected for cleared/reported invoices: those are immutable at ZATCA and
+    must be adjusted with a credit/debit note (HTTP 409 → use /amend)."""
+    orig = await db.scalar(
+        select(Invoice).where(Invoice.id == invoice_id, Invoice.tenant_id == user.tenant_id)
+    )
+    if orig is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "invoice_not_found")
+    if orig.status not in _EDITABLE_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"immutable_after_issue (status: {orig.status}) — amend with a credit/debit note instead",
+        )
+
+    csid = await _resolve_csid(db, user.tenant_id, orig.env)
+
+    # Preserve the original's chain position (ICV + PIH) — re-signing must not
+    # shift the ZATCA sequence. The incoming payload's icv/pih are overridden.
+    orig_pih = str((orig.payload_json or {}).get("pih_b64") or "")
+    bound = req.payload.model_copy(update={
+        "icv": orig.icv,
+        "pih_b64": orig_pih,
+        "uuid": orig.uuid,
+    })
+    processed = process_invoice(
+        bound, private_key_pem=csid.private_key_pem, certificate_pem=csid.certificate_pem
+    )
+
+    orig.doc_type = bound.doc_type
+    orig.subtype = SUBTYPE.get(bound.doc_type, "388")
+    orig.payload_json = bound.model_dump(mode="json")
+    orig.signed_xml = processed.signed_xml.decode()
+    orig.invoice_hash = processed.invoice_hash_b64
+    orig.qr_base64 = processed.qr_b64
+    orig.signed_at = datetime.now(timezone.utc)
+    orig.last_error = None
+
+    # Keep the chain row for this ICV consistent with the re-signed hash.
+    chain_row = await db.scalar(
+        select(PihChain).where(
+            PihChain.tenant_id == user.tenant_id, PihChain.env == orig.env, PihChain.icv == orig.icv,
+        )
+    )
+    if chain_row is not None:
+        chain_row.invoice_hash = processed.invoice_hash_b64
+
+    submit_mode = req.submit_mode if req.submit_mode in {"immediate", "queued", "draft"} else "draft"
+    orig.status = "draft" if submit_mode == "draft" else "queued"
+    await db.commit()
+    await db.refresh(orig)
+
+    if submit_mode == "immediate":
+        await _enqueue(orig.id)
+    elif submit_mode == "queued":
+        await publish(
+            user.tenant_id, "invoice.queued",
+            invoice_id=str(orig.id), icv=orig.icv, doc_type=orig.doc_type, status=orig.status,
+        )
+
+    return SubmitInvoiceResponse(
+        id=orig.id, status=orig.status, invoice_hash=orig.invoice_hash or "", icv=orig.icv,
         submit_mode=submit_mode,
     )
 
@@ -854,6 +977,87 @@ async def promote_draft(
 
 
 # ---------------------------------------------------------------------------
+# bulk promote — move many drafts to the queue at once, optionally submitting
+# them asynchronously so the client doesn't block on N ZATCA round-trips.
+# ---------------------------------------------------------------------------
+
+
+class BulkPromoteRequest(BaseModel):
+    ids: list[UUID]
+    submit_now: bool = False  # true → also dispatch each to ZATCA in the background
+
+
+class BulkPromoteResponse(BaseModel):
+    queued: int               # drafts moved to "queued"
+    skipped: int              # ids not found, not this tenant's, or not a draft
+    submitting: bool          # true if a background submission run was kicked off
+    invoice_ids: list[UUID]   # the promoted ids — client tracks these over SSE
+
+
+@router.post("/bulk-promote", response_model=BulkPromoteResponse)
+async def bulk_promote(
+    req: BulkPromoteRequest,
+    user: CurrentUserDep,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> BulkPromoteResponse:
+    """Promote a set of draft invoices to the queue in one shot.
+
+    With ``submit_now`` the promoted invoices are also dispatched to ZATCA, but
+    asynchronously: the request returns as soon as they're queued and a
+    background task drains them. The client tallies per-invoice SSE events into
+    a single summary notification instead of one toast per invoice.
+    """
+    requested = list(dict.fromkeys(req.ids))  # de-dupe, preserve order
+    if not requested:
+        return BulkPromoteResponse(queued=0, skipped=0, submitting=False, invoice_ids=[])
+
+    rows = (await db.execute(
+        select(Invoice).where(
+            Invoice.id.in_(requested),
+            Invoice.tenant_id == user.tenant_id,
+        )
+    )).scalars().all()
+    by_id = {inv.id: inv for inv in rows}
+
+    promoted: list[Invoice] = []
+    for inv_id in requested:
+        inv = by_id.get(inv_id)
+        if inv is not None and inv.status == "draft":
+            inv.status = "queued"
+            promoted.append(inv)
+
+    skipped = len(requested) - len(promoted)
+    if promoted:
+        await db.commit()
+
+    promoted_meta = [(inv.id, inv.icv, inv.doc_type) for inv in promoted]
+    promoted_ids = [m[0] for m in promoted_meta]
+
+    submitting = bool(req.submit_now and promoted_ids)
+
+    # For a plain "move to queue", announce the queued transition so other tabs
+    # and the live list update; the initiating tab suppresses its own echoes.
+    # For "submit now" we deliberately skip the queued broadcast: the client
+    # registers its batch tracker only after this response returns, so an early
+    # queued echo would leak as a per-invoice toast. The terminal events from
+    # the background drain (below) arrive later and are tracked cleanly.
+    if not submitting:
+        for inv_id, icv, doc_type in promoted_meta:
+            await publish(
+                user.tenant_id, "invoice.queued",
+                invoice_id=str(inv_id), icv=icv, doc_type=doc_type, status="queued",
+            )
+    else:
+        background.add_task(_drain_ids, user.tenant_id, promoted_ids)
+
+    return BulkPromoteResponse(
+        queued=len(promoted_ids), skipped=skipped,
+        submitting=submitting, invoice_ids=promoted_ids,
+    )
+
+
+# ---------------------------------------------------------------------------
 # amend — when an issued invoice's amount changes, ZATCA disallows mutation;
 # you issue a Credit Note (if reduction) or Debit Note (if increase) for the
 # delta. This endpoint encapsulates that policy.
@@ -1130,6 +1334,7 @@ async def list_invoices(
     ),
     date_from: str | None = Query(default=None, description="ISO date — invoices created on/after."),
     date_to: str | None = Query(default=None, description="ISO date — invoices created on/before."),
+    q: str | None = Query(default=None, description="Free-text search over invoice number + customer name."),
 ) -> InvoiceList:
     """Offset/limit pagination ordered by ICV desc, with multi-status + date range filters."""
     base = select(Invoice).where(Invoice.tenant_id == user.tenant_id)
@@ -1138,6 +1343,16 @@ async def list_invoices(
         wanted = [s.strip() for s in statuses.split(",") if s.strip()]
         if wanted:
             base = base.where(Invoice.status.in_(wanted))
+    if q and q.strip():
+        # invoice_number + customer name live inside the JSONB payload, so we
+        # match with the ->> text accessor. ILIKE = case-insensitive contains.
+        like = f"%{q.strip()}%"
+        base = base.where(
+            or_(
+                Invoice.payload_json["invoice_number"].astext.ilike(like),
+                Invoice.payload_json["customer"]["registration_name"].astext.ilike(like),
+            )
+        )
     if date_from:
         base = base.where(Invoice.created_at >= datetime.fromisoformat(date_from))
     if date_to:
