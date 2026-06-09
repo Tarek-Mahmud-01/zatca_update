@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, type BatchInvoiceResponse } from "../../../../lib/api-client";
+import { invoicesApi, type BatchInvoiceResponse } from "../_api";
 import { getToken } from "../../../../lib/token";
 import { useActiveEnv } from "../../../../lib/active-env";
 import { EnvBadge } from "../../../../components/EnvSwitcher";
@@ -40,7 +40,7 @@ export default function BatchPage() {
       if (!Array.isArray(payloads)) throw new Error("payloads must be a JSON array");
       if (payloads.length === 0) throw new Error("payload array is empty");
       if (payloads.length > 200) throw new Error("max 200 invoices per batch");
-      setResult(await api.submitBatch(token, env, payloads, submitMode));
+      setResult(await invoicesApi.submitBatch(token, env, payloads, submitMode));
     } catch (e) {
       setError(String(e));
     } finally {

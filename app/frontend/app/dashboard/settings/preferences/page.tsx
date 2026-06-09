@@ -1,11 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  api,
-  type QueueScheduleMode,
-  type TenantSettings,
-} from "../../../../lib/api-client";
+import { settingsApi, type QueueScheduleMode, type TenantSettings } from "@/lib/api/settings";
 import { getToken } from "../../../../lib/token";
 import {
   DEFAULT_PREFERENCES, fetchPreferences, type Preferences,

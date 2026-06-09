@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { type TenantOrganization } from "../../../../lib/api-client";
+import { type TenantOrganization } from "./_api";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useMe, useOrganizations, organizations as organizationsSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe } from "../../../../lib/store";
+import { useOrganizations, organizations as organizationsSlice } from "./_store";
 
 export default function OrganizationsSettingsPage() {
   const dispatch = useAppDispatch();

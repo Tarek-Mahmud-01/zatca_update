@@ -2,18 +2,17 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  api,
-  type InvoiceEvent,
-  type InvoiceListItem,
-} from "../../../lib/api-client";
+import { invoicesApi, type InvoiceListItem } from "./_api";
+import { currenciesApi } from "../settings/currencies/_api";
+import { type InvoiceEvent } from "../../../lib/api/events";
 import { getToken } from "../../../lib/token";
 import { useActiveEnv } from "../../../lib/active-env";
 import { usePreferences } from "../../../lib/preferences";
 import { useInvoiceEvents } from "../../../lib/use-invoice-events";
 import { pushNotification, suppressQueuedEcho } from "../../../lib/notifications";
 import { trackSubmitBatch } from "../../../lib/batch-tracker";
-import { useAppDispatch, useAppSelector, invoiceSel, invoicesActions, fetchInvoices } from "../../../lib/store";
+import { useAppDispatch, useAppSelector } from "../../../lib/store";
+import { invoiceSel, invoicesActions, fetchInvoices } from "./_store";
 import { Card, Empty, Field, PageHeader, StatusDot } from "../../../components/ui";
 import { DatePicker } from "../../../components/DatePicker";
 
@@ -71,7 +70,7 @@ export default function InvoicesPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    api.listCurrencies(token)
+    currenciesApi.listCurrencies(token)
       .then((list) => {
         const def = list.find((c) => c.is_default) ?? list[0];
         if (def) setDefaultCurrency(def.code);
@@ -138,7 +137,7 @@ export default function InvoicesPage() {
     if (!token) return;
     setSeeding(true);
     try {
-      const res = await api.seedDemoInvoices(token, env, "1100");
+      const res = await invoicesApi.seedDemoInvoices(token, env, "1100");
       setPage(1);
       await reload();
       pushNotification({
@@ -159,7 +158,7 @@ export default function InvoicesPage() {
     setProcessing(true);
     try {
       // force=true — manual click ignores schedule and drains everything.
-      const res = await api.processQueue(token, { force: true });
+      const res = await invoicesApi.processQueue(token, { force: true });
       pushNotification({
         tone: res.released > 0 ? "success" : "info",
         title: res.released > 0 ? `Released ${res.released} from queue` : "Queue is empty",
@@ -179,7 +178,7 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     try {
-      await api.releaseInvoice(token, id);
+      await invoicesApi.releaseInvoice(token, id);
       // Backend emits invoice.{cleared,reported,rejected,...} via SSE. Skip
       // the local toast — let the signaler be the single source.
       reload();
@@ -192,7 +191,7 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     try {
-      await api.retryInvoice(token, id);
+      await invoicesApi.retryInvoice(token, id);
       // No toast here — the backend's `submit_invoice_to_zatca` publishes an
       // invoice.rejected/reported/cleared event via the SSE signaler, which
       // NotificationFeed picks up and surfaces. Single source of truth.
@@ -208,7 +207,7 @@ export default function InvoicesPage() {
     const token = getToken();
     if (!token) return;
     try {
-      await api.promoteDraft(token, id, { submit_now });
+      await invoicesApi.promoteDraft(token, id, { submit_now });
       // Backend signals invoice.queued / .reported / .cleared via SSE. No
       // local toast — single signal source.
       reload();
@@ -246,7 +245,7 @@ export default function InvoicesPage() {
     if (!token || selectedCount === 0) return;
     setBulkBusy(true);
     try {
-      const res = await api.bulkPromote(token, [...selected], false);
+      const res = await invoicesApi.bulkPromote(token, [...selected], false);
       // The server broadcasts invoice.queued per row; swallow our own echoes so
       // we show one summary instead of N "Invoice queued" toasts.
       for (const id of res.invoice_ids) suppressQueuedEcho(id);
@@ -269,7 +268,7 @@ export default function InvoicesPage() {
     if (!token || selectedCount === 0) return;
     setBulkBusy(true);
     try {
-      const res = await api.bulkPromote(token, [...selected], true);
+      const res = await invoicesApi.bulkPromote(token, [...selected], true);
       if (res.invoice_ids.length > 0) {
         // Track each invoice's SSE lifecycle into a single summary notification.
         trackSubmitBatch(res.invoice_ids, { onUpdate: debouncedReload });

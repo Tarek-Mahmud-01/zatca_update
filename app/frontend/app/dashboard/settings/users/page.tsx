@@ -1,14 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  api,
-  type TenantBranch,
-  type TenantUser,
-} from "../../../../lib/api-client";
+import { tenantUsersApi, type TenantUser } from "./_api";
+import { type TenantBranch } from "../branches/_api";
 import { getToken } from "../../../../lib/token";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../../components/ui";
-import { useAppDispatch, useMe, useTenantUsers, useBranches, tenantUsers as tenantUsersSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe } from "../../../../lib/store";
+import { useTenantUsers, tenantUsers as tenantUsersSlice } from "./_store";
+import { useBranches } from "../branches/_store";
 
 type TabId = "list" | "invite";
 const ROLES = ["admin", "member", "viewer"] as const;
@@ -26,7 +25,7 @@ export default function UsersPage() {
     if (!token) return;
     try {
       // Role/branch endpoints return the fresh row — upsert it into the store.
-      const updated = await api.updateTenantUserRole(token, u.id, role);
+      const updated = await tenantUsersApi.updateTenantUserRole(token, u.id, role);
       dispatch(tenantUsersSlice.actions.upsertOne(updated));
     } catch (e) {
       setError(String(e));
@@ -37,7 +36,7 @@ export default function UsersPage() {
     const token = getToken();
     if (!token) return;
     try {
-      const updated = await api.updateTenantUserBranch(token, u.id, branchId);
+      const updated = await tenantUsersApi.updateTenantUserBranch(token, u.id, branchId);
       dispatch(tenantUsersSlice.actions.upsertOne(updated));
     } catch (e) {
       setError(String(e));

@@ -3,15 +3,14 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import {
-  api,
-  type BusinessSettings,
-  type Customer,
-  type Product,
-  type TenantBranch,
-  type TenantCurrency,
-  type TenantOrganization,
-} from "../../../../lib/api-client";
+import { invoicesApi } from "../_api";
+import { customersApi, type Customer } from "../../customers/_api";
+import { productsApi, type Product } from "../../products/_api";
+import { currenciesApi, type TenantCurrency } from "../../settings/currencies/_api";
+import { organizationsApi, type TenantOrganization } from "../../settings/organizations/_api";
+import { branchesApi, type TenantBranch } from "../../settings/branches/_api";
+import { businessApi, type BusinessSettings } from "../../settings/business/_api";
+import { settingsApi } from "@/lib/api/settings";
 import { getToken } from "../../../../lib/token";
 import { useMe } from "../../../../lib/store";
 import { useActiveEnv } from "../../../../lib/active-env";
@@ -153,11 +152,11 @@ export default function NewInvoicePage() {
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    Promise.all([api.listCustomers(token), api.listProducts(token)]).then(([cs, ps]) => {
+    Promise.all([customersApi.listCustomers(token), productsApi.listProducts(token)]).then(([cs, ps]) => {
       setCustomers(cs);
       setProducts(ps);
     }).catch((e) => setError(String(e)));
-    api.getTenantSettings(token)
+    settingsApi.getTenantSettings(token)
       .then((s) => {
         const strategy = s.queue_strategy === "queued" ? "queued" : "immediate";
         setTenantStrategy(strategy);
@@ -167,14 +166,14 @@ export default function NewInvoicePage() {
         setTenantStrategy("immediate");
         setSubmitChoice((prev) => prev ?? "immediate");
       });
-    api.getBusinessSettings(token)
+    businessApi.getBusinessSettings(token)
       .then(setBusiness)
       .catch(() => { /* fall back to defaults below */ });
     // User's default branch comes from the shared session (useMe), not a fetch.
     Promise.all([
-      api.listCurrencies(token),
-      api.listOrganizations(token),
-      api.listBranches(token),
+      currenciesApi.listCurrencies(token),
+      organizationsApi.listOrganizations(token),
+      branchesApi.listBranches(token),
     ]).then(([ccys, orgs, brs]) => {
       setTenantCurrencies(ccys);
       setOrganizations(orgs);
@@ -210,7 +209,7 @@ export default function NewInvoicePage() {
     if (!sourceId || !mode) return;
     const token = getToken();
     if (!token) return;
-    api.getInvoice(token, sourceId).then((src) => {
+    invoicesApi.getInvoice(token, sourceId).then((src) => {
       const p = (src.payload_json ?? {}) as Record<string, unknown>;
       const family = String(p.doc_type ?? "simplified_invoice").startsWith("standard")
         ? "standard" : "simplified";
@@ -340,7 +339,7 @@ export default function NewInvoicePage() {
     if (!token || !isNote) return;
     const handle = setTimeout(async () => {
       try {
-        const page = await api.listInvoices(token, {
+        const page = await invoicesApi.listInvoices(token, {
           page: 1, page_size: 25,
           statuses: ["cleared", "reported"],
         });
@@ -374,7 +373,7 @@ export default function NewInvoicePage() {
     const token = getToken();
     if (!token) return;
     try {
-      const inv = await api.getInvoice(token, id);
+      const inv = await invoicesApi.getInvoice(token, id);
       const p = inv.payload_json as unknown as {
         invoice_number?: string;
         supplier?: unknown;
@@ -678,8 +677,8 @@ export default function NewInvoicePage() {
       // Edit mode replaces the SAME not-yet-issued invoice in place; everything
       // else (new / amend / from-rejected) creates a fresh document.
       const res = pageMode === "edit" && editInvoiceId
-        ? await api.replaceInvoice(token, editInvoiceId, payload, submitMode)
-        : await api.submitInvoice(token, { env, payload, submit_mode: submitMode });
+        ? await invoicesApi.replaceInvoice(token, editInvoiceId, payload, submitMode)
+        : await invoicesApi.submitInvoice(token, { env, payload, submit_mode: submitMode });
       const appliedMode = res.submit_mode ?? submitMode;
       const verb = pageMode === "edit" ? "Invoice updated" : pageMode === "amend" ? "Note issued" : "Invoice";
       const title =

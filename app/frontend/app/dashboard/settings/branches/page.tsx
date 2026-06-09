@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import {
-  type TenantBranch,
-  type TenantOrganization,
-} from "../../../../lib/api-client";
+import { type TenantBranch } from "./_api";
+import { type TenantOrganization } from "../organizations/_api";
 import { Card, Field, FieldGrid, PageHeader } from "../../../../components/ui";
 import { SearchSelect } from "../../../../components/SearchSelect";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useMe, useBranches, useOrganizations, branches as branchesSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe } from "../../../../lib/store";
+import { useBranches, branches as branchesSlice } from "./_store";
+import { useOrganizations } from "../organizations/_store";
 
 export default function BranchesSettingsPage() {
   const dispatch = useAppDispatch();

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, type InvoiceDetail } from "../../../../lib/api-client";
+import { invoicesApi, type InvoiceDetail } from "../_api";
 import { getToken } from "../../../../lib/token";
 import { useRouter } from "next/navigation";
 import { Banner, Card, Field, FieldGrid, PageHeader, StatusDot, Tabs } from "../../../../components/ui";
@@ -68,7 +68,7 @@ export default function InvoiceDetailPage() {
   useEffect(() => {
     const token = getToken();
     if (!token || !params.id) return;
-    api.getInvoice(token, params.id).then(setInv).catch((e) => setError(String(e)));
+    invoicesApi.getInvoice(token, params.id).then(setInv).catch((e) => setError(String(e)));
   }, [params.id]);
 
   if (error) {
@@ -143,7 +143,7 @@ export default function InvoiceDetailPage() {
                     if (!token) return;
                     setRetrying(true);
                     try {
-                      await api.retryInvoice(token, inv.id);
+                      await invoicesApi.retryInvoice(token, inv.id);
                       window.location.reload();
                     } catch (e) {
                       pushNotification({ tone: "danger", title: "Retry failed", body: String(e) });
@@ -492,7 +492,7 @@ function AmendDialog({
     setBusy(true);
     setError(null);
     try {
-      const res = await api.amendInvoice(token, invoice.id, { new_payable: newPayable, reason });
+      const res = await invoicesApi.amendInvoice(token, invoice.id, { new_payable: newPayable, reason });
       onSubmitted(res.note_invoice_id);
     } catch (e) {
       setError(String(e));
@@ -682,7 +682,7 @@ function ResignButton({ id, onDone }: { id: string; onDone: (inv: InvoiceDetail)
     setBusy(true);
     setErr(null);
     try {
-      const updated = await api.resignInvoice(token, id);
+      const updated = await invoicesApi.resignInvoice(token, id);
       onDone(updated);
     } catch (e) {
       setErr(String(e));

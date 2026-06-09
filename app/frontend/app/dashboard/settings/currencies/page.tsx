@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { type TenantCurrency } from "../../../../lib/api-client";
+import { type TenantCurrency } from "./_api";
 import { getToken } from "../../../../lib/token";
 import { DatePicker } from "../../../../components/DatePicker";
 import { pushNotification } from "../../../../lib/notifications";
-import { useAppDispatch, useMe, useCurrencies, currencies as currenciesSlice } from "../../../../lib/store";
+import { useAppDispatch, useMe } from "../../../../lib/store";
+import { useCurrencies, currencies as currenciesSlice } from "./_store";
 
 const CURRENCY_META: Record<string, { name: string; shortName: string; country: string; symbol: string; decimals: number }> = {
   SAR: { name: "Saudi Riyal",        shortName: "Riyal",   country: "Saudi Arabia",    symbol: "ر.س",   decimals: 2 },

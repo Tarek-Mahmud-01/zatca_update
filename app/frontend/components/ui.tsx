@@ -132,6 +132,17 @@ export function Field({
 }
 
 /* ---------------------------------------------------------------------------
+ * Input — thin wrapper over <input> carrying the shared `.input` styling.
+ * Fully controlled from the parent: every native attribute (value, onChange,
+ * type, required, maxLength, autoComplete, …) is passed through as a prop, so
+ * nothing is hardcoded here. Extra classes (e.g. "font-mono") merge with the
+ * base class instead of replacing it.
+ * -------------------------------------------------------------------------- */
+export function Input({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={`input ${className}`.trim()} {...props} />;
+}
+
+/* ---------------------------------------------------------------------------
  * Empty state for empty lists
  * -------------------------------------------------------------------------- */
 export function Empty({

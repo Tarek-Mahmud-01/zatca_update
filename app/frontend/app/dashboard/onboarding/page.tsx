@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type ComplianceCheckResponse, type CompliancePreviewItem } from "../../../lib/api-client";
+import { onboardingApi, type ComplianceCheckResponse, type CompliancePreviewItem } from "./_api";
 import { getToken } from "../../../lib/token";
 import { useActiveEnv } from "../../../lib/active-env";
 import { EnvBadge } from "../../../components/EnvSwitcher";
@@ -57,7 +57,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     const token = getToken();
     if (!token || !csidId || step !== "3") return;
-    api.previewComplianceCheck(token, csidId).then(setPreviewItems).catch(() => setPreviewItems([]));
+    onboardingApi.previewComplianceCheck(token, csidId).then(setPreviewItems).catch(() => setPreviewItems([]));
   }, [csidId, step]);
 
   function upd(k: keyof typeof config, v: string) { setConfig((c) => ({ ...c, [k]: v })); }
@@ -67,7 +67,7 @@ export default function OnboardingPage() {
     if (!token) return;
     setBusy(true); setError(null);
     try {
-      const res = await api.generateCsr(token, env, config);
+      const res = await onboardingApi.generateCsr(token, env, config);
       setCsidId(res.csid_id);
       setCsrPem(res.csr_pem);
       setStep("2");
@@ -77,7 +77,7 @@ export default function OnboardingPage() {
     const token = getToken();
     if (!token || !csidId) return;
     setBusy(true); setError(null);
-    try { await api.issueCompliance(token, csidId, otp); setStep("3"); }
+    try { await onboardingApi.issueCompliance(token, csidId, otp); setStep("3"); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
   async function runChecks() {
@@ -85,7 +85,7 @@ export default function OnboardingPage() {
     if (!token || !csidId) return;
     setBusy(true); setError(null);
     try {
-      const res = await api.runComplianceCheck(token, csidId);
+      const res = await onboardingApi.runComplianceCheck(token, csidId);
       setCheckResult(res);
       if (res.all_passed) setStep("4");
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
@@ -94,7 +94,7 @@ export default function OnboardingPage() {
     const token = getToken();
     if (!token || !csidId) return;
     setBusy(true); setError(null);
-    try { await api.issueProduction(token, csidId); setStep("5"); }
+    try { await onboardingApi.issueProduction(token, csidId); setStep("5"); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
 
@@ -307,7 +307,7 @@ function RenewProductionSection({ env }: { env: "sandbox" | "simulation" | "prod
     if (!token) return;
     setBusy(true); setError(null);
     try {
-      const res = await api.renewProductionCsid(token, { env, otp });
+      const res = await onboardingApi.renewProductionCsid(token, { env, otp });
       setResult(res);
       setConfirming(false);
     } catch (e) {

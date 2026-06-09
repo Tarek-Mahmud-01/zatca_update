@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api, type InvoiceEvent } from "../../lib/api-client";
+import { invoicesApi } from "./invoices/_api";
+import { type InvoiceEvent } from "../../lib/api/events";
 import { getToken } from "../../lib/token";
 import { useInvoiceEvents } from "../../lib/use-invoice-events";
 import { Card, PageHeader, StatusDot } from "../../components/ui";
@@ -24,7 +25,7 @@ export default function OverviewPage() {
     const token = getToken();
     if (!token) return;
     // Lightweight grouped-count endpoint — not a 200-row page fetch.
-    api.getInvoiceStats(token).then(setCounts).catch(() => setCounts(EMPTY));
+    invoicesApi.getInvoiceStats(token).then(setCounts).catch(() => setCounts(EMPTY));
   }, []);
 
   useInvoiceEvents((event) => {

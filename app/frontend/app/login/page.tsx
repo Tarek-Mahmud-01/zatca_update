@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "../../lib/api-client";
-import { Banner, Card, Field } from "../../components/ui";
+import { loginApi } from "./_api";
+import { Banner, Field, Input } from "../../components/ui";
+import { AuthLayout, SubmitButton, AuthAltLink } from "../../components/AuthLayout";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,7 +18,7 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      const { access_token } = await api.login(email, password);
+      const { access_token } = await loginApi.login(email, password);
       document.cookie = `token=${access_token}; path=/; max-age=43200; SameSite=Lax`;
       router.push("/dashboard");
     } catch (err) {
@@ -29,32 +29,23 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[var(--color-bg-muted)] flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-md">
-        <div className="mb-6 text-center">
-          <Link href="/" className="text-lg font-semibold text-[var(--color-fg)] tracking-tight">
-            ZATCA <span className="text-[var(--color-fg-muted)] font-normal">Phase 2</span>
-          </Link>
-        </div>
-        <Card title="Sign in" description="Welcome back.">
-          <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-            <Field label="Email" required>
-              <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
-            </Field>
-            <Field label="Password" required>
-              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
-            </Field>
-            {error && <Banner tone="danger">{error}</Banner>}
-            <button className="btn btn-primary" disabled={busy} type="submit">
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-            <div className="text-sm text-[var(--color-fg-muted)] text-center">
-              Don&apos;t have an account?{" "}
-              <Link href="/signup" className="text-[var(--color-accent)] hover:underline">Create tenant</Link>
-            </div>
-          </form>
-        </Card>
-      </div>
-    </main>
+    <AuthLayout title="Sign in" description="Welcome back.">
+      <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+        {/* Email — controlled by `email` state */}
+        <Field label="Email" required>
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+        </Field>
+        {/* Password — controlled by `password` state */}
+        <Field label="Password" required>
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
+        </Field>
+        {/* Error — only shown when a login attempt failed */}
+        {error && <Banner tone="danger">{error}</Banner>}
+        {/* Submit — disabled + spinner label while the request is in flight */}
+        <SubmitButton busy={busy} busyLabel="Signing in…">Sign in</SubmitButton>
+        {/* Footer — route new tenants to signup */}
+        <AuthAltLink prompt="Don't have an account?" href="/signup" label="Create tenant" />
+      </form>
+    </AuthLayout>
   );
 }

@@ -1,11 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { type Category, type Product } from "../../../lib/api-client";
+import { type Product } from "./_api";
+import { type Category } from "../categories/_api";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
 import { SearchSelect } from "../../../components/SearchSelect";
 import { VAT_CATEGORIES } from "../../../lib/catalog";
-import { useAppDispatch, useProducts, useCategories, products as productsSlice } from "../../../lib/store";
+import { useAppDispatch } from "../../../lib/store";
+import { useProducts, products as productsSlice } from "./_store";
+import { useCategories } from "../categories/_store";
 
 type TabId = "list" | "add";
 

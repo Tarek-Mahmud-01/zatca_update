@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { type Customer } from "../../../lib/api-client";
+import { type Customer } from "./_api";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
-import { useAppDispatch, useCustomers, customers as customersSlice } from "../../../lib/store";
+import { useAppDispatch } from "../../../lib/store";
+import { useCustomers, customers as customersSlice } from "./_store";
 
 type TabId = "list" | "add";
 

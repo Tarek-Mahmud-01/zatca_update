@@ -14,7 +14,7 @@
  * full reload.
  */
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import { api, type Me } from "../api-client";
+import { authApi, type Me } from "../api/auth";
 import { getToken } from "../token";
 
 interface SessionState {
@@ -31,7 +31,7 @@ export const fetchMe = createAsyncThunk<Me, void, { rejectValue: string }>(
   async (_arg, { rejectWithValue }) => {
     const token = getToken();
     if (!token) return rejectWithValue("not_authenticated");
-    try { return await api.me(token); }
+    try { return await authApi.me(token); }
     catch (e) { return rejectWithValue(String(e)); }
   },
 );

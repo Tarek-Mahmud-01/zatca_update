@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { type Category } from "../../../lib/api-client";
+import { type Category } from "./_api";
 import { Banner, Card, Empty, Field, FieldGrid, PageHeader, Tabs } from "../../../components/ui";
-import { useAppDispatch, useCategories, categories as categoriesSlice } from "../../../lib/store";
+import { useAppDispatch } from "../../../lib/store";
+import { useCategories, categories as categoriesSlice } from "./_store";
 
 type TabId = "list" | "add";
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, type InvoiceDetail } from "../../../../../lib/api-client";
+import { invoicesApi, type InvoiceDetail } from "../../_api";
 import { getToken } from "../../../../../lib/token";
 import { pushNotification } from "../../../../../lib/notifications";
 import { Banner, Card, Field, FieldGrid, PageHeader } from "../../../../../components/ui";
@@ -59,7 +59,7 @@ export default function AmendPage() {
   useEffect(() => {
     const token = getToken();
     if (!token || !params.id) return;
-    api.getInvoice(token, params.id).then((inv) => {
+    invoicesApi.getInvoice(token, params.id).then((inv) => {
       setOrig(inv);
       const p = inv.payload_json as unknown as {
         lines?: Array<{
@@ -130,7 +130,7 @@ export default function AmendPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.amendInvoice(token, orig.id, {
+      const res = await invoicesApi.amendInvoice(token, orig.id, {
         new_payable: totals.payable.toFixed(2),
         reason,
       });

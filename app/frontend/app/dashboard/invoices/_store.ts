@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Invoices slice — paginated, so it can't use the plain CRUD factory.
+ * Invoices store slice (feature-owned) — paginated, so it can't use the plain
+ * CRUD factory.
  *
  * - fetchInvoices(params)  → setAll(page items) + pagination meta
  * - patchStatus({id,status}) → mutate one row's status in place (driven by the
@@ -10,8 +11,9 @@
  * - removeInvoice(id)      → drop a row
  */
 import { createAsyncThunk, createEntityAdapter, createSlice, type PayloadAction } from "@reduxjs/toolkit";
-import { api, type InvoiceListItem, type InvoiceListPage } from "../api-client";
-import { getToken } from "../token";
+import { getToken } from "@/lib/token";
+import type { RootState } from "@/lib/store";
+import { invoicesApi, type InvoiceListItem, type InvoiceListPage } from "./_api";
 
 export interface InvoiceListParams {
   page?: number;
@@ -29,7 +31,7 @@ export const fetchInvoices = createAsyncThunk<
 >("invoices/fetch", async (params, { rejectWithValue }) => {
   const token = getToken();
   if (!token) return rejectWithValue("not_authenticated");
-  try { return await api.listInvoices(token, params); }
+  try { return await invoicesApi.listInvoices(token, params); }
   catch (e) { return rejectWithValue(String(e)); }
 });
 
@@ -79,3 +81,4 @@ const slice = createSlice({
 export const invoicesReducer = slice.reducer;
 export const invoicesActions = slice.actions;
 export const invoicesAdapter = adapter;
+export const invoiceSel = adapter.getSelectors((s: RootState) => s.invoices);
