@@ -9,7 +9,7 @@ from app.deps import CurrentUserDep
 from apps.currencies.models import TenantCurrency
 from apps.currencies.schemas import CurrencyCreate, CurrencyRead, CurrencyUpdate
 
-router = APIRouter(prefix="/currencies", tags=["currencies"])
+router = APIRouter(prefix="/settings/currencies", tags=["currencies"])
 
 
 @router.get("", response_model=list[CurrencyRead])
