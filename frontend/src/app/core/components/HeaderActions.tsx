@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { handleAuthExpired } from "@/apps/auth/utils/token";
+import { decodeJwtPayload, getToken, handleAuthExpired } from "@/apps/auth/utils/token";
 import { useMe } from "@/apps/auth/store/session";
 import {
   clearAll, markAllRead, useNotifications, type Notification,
@@ -33,6 +33,66 @@ function initials(name: string | undefined | null): string {
     .map((w) => w[0]?.toUpperCase())
     .slice(0, 2)
     .join("") || "?";
+}
+
+/** Counts down seconds until the JWT expires. Returns null when token has no exp. */
+function useSessionCountdown(): number | null {
+  const [secs, setSecs] = useState<number | null>(() => {
+    const t = getToken();
+    const exp = t ? decodeJwtPayload(t)?.exp : undefined;
+    if (!exp) return null;
+    return Math.max(0, Math.floor(exp - Date.now() / 1000));
+  });
+
+  useEffect(() => {
+    const t = getToken();
+    const exp = t ? decodeJwtPayload(t)?.exp : undefined;
+    if (!exp) return;
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.floor(exp - Date.now() / 1000));
+      setSecs(remaining);
+      if (remaining === 0) handleAuthExpired();
+    };
+
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return secs;
+}
+
+function SessionTimer() {
+  const secs = useSessionCountdown();
+  if (secs === null) return null;
+
+  const mins = Math.floor(secs / 60);
+  const s = secs % 60;
+  const label = mins > 0
+    ? `${mins}:${String(s).padStart(2, "0")}`
+    : `${secs}s`;
+
+  const urgent = secs <= 60;
+  const critical = secs <= 10;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold tabular-nums border transition-colors ${
+        critical
+          ? "bg-red-100 text-red-700 border-red-300 animate-pulse"
+          : urgent
+          ? "bg-orange-100 text-orange-700 border-orange-300"
+          : "bg-[var(--color-bg-muted)] text-[var(--color-fg-muted)] border-[var(--color-border)]"
+      }`}
+      title="Session expires in"
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </svg>
+      {label}
+    </span>
+  );
 }
 
 const TONE_DOT: Record<string, string> = {
@@ -79,6 +139,8 @@ export function HeaderActions() {
 
   return (
     <div className="flex items-center gap-1.5">
+      {/* Session countdown */}
+      <SessionTimer />
       {/* Notification bell */}
       <div ref={bellRef} className="relative">
         <button

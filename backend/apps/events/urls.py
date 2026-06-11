@@ -45,7 +45,7 @@ async def events_ws(
         while True:
             now = datetime.now(timezone.utc).timestamp()
             if now >= exp:
-                # JWT expired — close and let the client redirect to /login.
+                await websocket.send_json({"type": "session_expired"})
                 await websocket.close(code=4401)
                 return
 
@@ -65,6 +65,9 @@ async def events_ws(
             except asyncio.TimeoutError:
                 # Re-check expiry before sending ping (token may have just expired).
                 if datetime.now(timezone.utc).timestamp() >= exp:
+                    # Send the message first — browsers sometimes remap custom
+                    # close codes to 1006, so the message is the reliable signal.
+                    await websocket.send_json({"type": "session_expired"})
                     await websocket.close(code=4401)
                     return
                 await websocket.send_json({"type": "ping"})
