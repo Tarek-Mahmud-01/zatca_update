@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,7 +41,7 @@ async def create_currency(
         tenant_id=user.tenant_id,
         code=body.code.upper(),
         exchange_rate=body.exchange_rate,
-        as_of_date=body.as_of_date,
+        as_of_date=body.as_of_date or date.today(),
         is_default=body.is_default,
     )
     db.add(currency)

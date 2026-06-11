@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class CurrencyCreate(BaseModel):
     code: str  # ISO 4217 (3-char)
     exchange_rate: Decimal = Decimal("1.0")
-    as_of_date: date
+    as_of_date: date | None = None  # defaults to today on the server
     is_default: bool = False
 
 

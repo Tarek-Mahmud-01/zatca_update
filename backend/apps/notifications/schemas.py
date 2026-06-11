@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class WebhookCreate(BaseModel):
     url: str
-    secret: str
+    secret: str | None = None  # auto-generated if not provided
     events: list[str]
     enabled: bool = True
 

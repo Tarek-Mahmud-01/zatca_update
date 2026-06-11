@@ -1,3 +1,4 @@
+import secrets
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -23,7 +24,7 @@ async def create_webhook(payload: WebhookCreate, user: CurrentUserDep, db: DbSes
     webhook = Webhook(
         tenant_id=user.tenant_id,
         url=payload.url,
-        secret=payload.secret,
+        secret=payload.secret or secrets.token_hex(32),
         events=payload.events,
         enabled=payload.enabled,
     )

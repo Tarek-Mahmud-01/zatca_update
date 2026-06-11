@@ -6,7 +6,8 @@ import uvicorn
 
 def main() -> None:
     reload = "--no-reload" not in sys.argv
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=reload)
+    port = int(__import__("os").getenv("PORT", "8011"))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=reload)
 
 
 if __name__ == "__main__":

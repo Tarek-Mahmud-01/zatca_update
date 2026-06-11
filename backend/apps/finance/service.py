@@ -53,7 +53,16 @@ class FinanceService(BaseService):
 
     async def create_rate(self, payload: ExchangeRateCreate) -> ExchangeRate:
         await self.currencies.get_or_404(payload.currency_id)
-        await self.rates.create(currency_id=payload.currency_id, rate=payload.rate, as_of_date=payload.as_of_date)
+        as_of = payload.as_of_date or date.today()
+        # Upsert: update rate if a row already exists for this currency+date
+        existing = await self.rates.find_one(
+            ExchangeRate.currency_id == payload.currency_id,
+            ExchangeRate.as_of_date == as_of,
+        )
+        if existing:
+            await self.rates.update(existing, rate=payload.rate)
+        else:
+            await self.rates.create(currency_id=payload.currency_id, rate=payload.rate, as_of_date=as_of)
         await self.commit()
         rows = await self.rates.list_rates(ExchangeRate.currency_id == payload.currency_id, order_by=[ExchangeRate.as_of_date.desc()], limit=1, offset=0)
         return rows[0]

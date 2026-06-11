@@ -12,7 +12,7 @@
 
 const HKDF_SALT = new TextEncoder().encode("zatca-api-v1");
 const HKDF_INFO = new TextEncoder().encode("aes-gcm");
-const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8001";
+const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8011";
 
 interface CryptoSession {
   aesKey: CryptoKey;

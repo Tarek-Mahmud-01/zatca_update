@@ -2,11 +2,11 @@ import { request } from "@/apps/http/client";
 import type { Currency, CurrencyCreate, ExchangeRate, ExchangeRateCreate } from "../types/finance.types";
 
 export const financeApi = {
-  listCurrencies: () => request<Currency[]>("/finance/currencies"),
+  listCurrencies: () => request<Currency[]>("/api/v1/finance/currencies"),
   createCurrency: (data: CurrencyCreate) =>
-    request<Currency>("/finance/currencies", { method: "POST", body: JSON.stringify(data) }),
+    request<Currency>("/api/v1/finance/currencies", { method: "POST", body: JSON.stringify(data) }),
   setDefault: (id: string) =>
-    request<Currency>(`/finance/currencies/${id}/default`, { method: "POST" }),
+    request<Currency>(`/api/v1/finance/currencies/${id}/default`, { method: "POST" }),
   listRates: (params?: { currency_id?: string; limit?: number; offset?: number }) => {
     const qs = params ? "?" + new URLSearchParams(
       Object.fromEntries(
@@ -15,8 +15,8 @@ export const financeApi = {
           .map(([k, v]) => [k, String(v)])
       )
     ).toString() : "";
-    return request<{ items: ExchangeRate[]; total: number }>(`/finance/exchange-rates${qs}`);
+    return request<{ items: ExchangeRate[]; total: number }>(`/api/v1/finance/exchange-rates${qs}`);
   },
   createRate: (data: ExchangeRateCreate) =>
-    request<ExchangeRate>("/finance/exchange-rates", { method: "POST", body: JSON.stringify(data) }),
+    request<ExchangeRate>("/api/v1/finance/exchange-rates", { method: "POST", body: JSON.stringify(data) }),
 };

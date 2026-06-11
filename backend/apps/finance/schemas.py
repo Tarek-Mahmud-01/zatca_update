@@ -23,7 +23,7 @@ class CurrencyRead(BaseModel):
 class ExchangeRateCreate(BaseModel):
     currency_id: UUID
     rate: Decimal = Field(gt=0)
-    as_of_date: date
+    as_of_date: date | None = None  # defaults to today on the server
 
 
 class CurrencyBrief(BaseModel):
