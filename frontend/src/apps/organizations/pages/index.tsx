@@ -1,0 +1,193 @@
+﻿"use client";
+
+import { useState } from "react";
+import { Provider } from "react-redux";
+import { Card, PageHeader } from "@/app/core/components/ui";
+import { pushNotification } from "@/apps/notifications/notifications";
+import { useMe } from "@/apps/auth/store/session";
+import { organizationsStore, useOrganizationsDispatch } from "../store/organizations.store";
+import { createOne, updateOne, deleteOne } from "../store/organizations.thunks";
+import { useOrganizations } from "../hooks/useOrganizations";
+import { OrgForm } from "../components/OrgForm";
+import type { TenantOrganization } from "../types/organization.types";
+
+// Default export mounts this feature's own store Provider (no global Redux).
+export default function OrganizationsSettingsPage() {
+  return (
+    <Provider store={organizationsStore}>
+      <OrganizationsView />
+    </Provider>
+  );
+}
+
+function OrganizationsView() {
+  const dispatch = useOrganizationsDispatch();
+  const { items: organizations, refetch } = useOrganizations();
+  const { me } = useMe();              // shared session — no per-page /me fetch
+  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  const isAdmin = me?.role === "admin";
+
+  async function create(v: Partial<TenantOrganization>) {
+    setBusy(true);
+    try {
+      await dispatch(createOne(v)).unwrap();
+      setAdding(false);
+      // is_default flips the previous default server-side → reconcile siblings.
+      if (v.is_default) refetch();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Create failed", body: String(e) });
+    } finally { setBusy(false); }
+  }
+
+  async function update(id: string, v: Partial<TenantOrganization>) {
+    setBusy(true);
+    try {
+      await dispatch(updateOne({ id, body: v })).unwrap();
+      setEditingId(null);
+      if (v.is_default) refetch();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Update failed", body: String(e) });
+    } finally { setBusy(false); }
+  }
+
+  async function remove(o: TenantOrganization) {
+    if (!confirm(`Remove "${o.name}"? Branches under it will also be removed.`)) return;
+    setBusy(true);
+    try {
+      await dispatch(deleteOne(o.id)).unwrap();
+    } catch (e) {
+      pushNotification({ tone: "danger", title: "Delete failed", body: String(e) });
+    } finally { setBusy(false); }
+  }
+
+  const filtered = organizations.filter((o) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      o.name.toLowerCase().includes(q) ||
+      (o.trade_name ?? "").toLowerCase().includes(q) ||
+      (o.vat_number ?? "").includes(q) ||
+      (o.city ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div>
+      <PageHeader
+        title="Organizations"
+        description="Legal entities that issue invoices."
+        actions={isAdmin && !adding && !editingId ? (
+          <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
+            + New organization
+          </button>
+        ) : null}
+      />
+
+      {adding && (
+        <Card className="mb-4">
+          <OrgForm
+            value={{ name: "", country_code: "SA", is_default: organizations.length === 0 }}
+            onSave={create}
+            onCancel={() => setAdding(false)}
+            busy={busy}
+          />
+        </Card>
+      )}
+
+      {/* Search */}
+      <div className="mb-4 flex gap-2">
+        <input
+          className="input"
+          style={{ maxWidth: 280 }}
+          placeholder="Search organizations…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {search && (
+          <button className="btn btn-default" onClick={() => setSearch("")}>Reset</button>
+        )}
+      </div>
+
+      <Card>
+        {organizations.length === 0 ? (
+          <p className="muted">No organizations yet. Add one to start issuing invoices.</p>
+        ) : (
+          <table className="responsive-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>VAT number</th>
+                <th>City</th>
+                <th>Status</th>
+                {isAdmin && <th className="w-1 whitespace-nowrap text-right">Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((o) =>
+                editingId === o.id ? (
+                  <tr key={o.id}>
+                    <td colSpan={isAdmin ? 5 : 4} className="py-3">
+                      <OrgForm
+                        value={o}
+                        onSave={(v) => update(o.id, v)}
+                        onCancel={() => setEditingId(null)}
+                        busy={busy}
+                      />
+                    </td>
+                  </tr>
+                ) : (
+                  <tr key={o.id} className="hover:bg-[var(--color-bg-hover)]">
+                    <td data-label="Name" className="font-medium">
+                      <div>{o.name}</div>
+                      {o.trade_name && o.trade_name !== o.name && (
+                        <div className="text-xs text-[var(--color-fg-muted)]">{o.trade_name}</div>
+                      )}
+                    </td>
+                    <td data-label="VAT number" className="font-mono text-sm">
+                      {o.vat_number ?? "—"}
+                    </td>
+                    <td data-label="City" className="text-[var(--color-fg-2)]">
+                      {[o.city, o.country_code].filter(Boolean).join(", ") || "—"}
+                    </td>
+                    <td data-label="Status">
+                      {o.is_default ? (
+                        <span className="badge badge-neutral">default</span>
+                      ) : (
+                        <span className="text-[var(--color-fg-muted)] text-xs">—</span>
+                      )}
+                    </td>
+                    {isAdmin && (
+                      <td data-label="Actions" className="md:text-right whitespace-nowrap">
+                        <div className="flex gap-2 md:justify-end">
+                          <button
+                            type="button"
+                            className="btn btn-default !py-1 !px-2 text-xs"
+                            onClick={() => setEditingId(o.id)}
+                          >Edit</button>
+                          {!o.is_default && (
+                            <button
+                              type="button"
+                              className="btn btn-danger !py-1 !px-2 text-xs"
+                              onClick={() => remove(o)}
+                            >Remove</button>
+                          )}
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                )
+              )}
+              {filtered.length === 0 && (
+                <tr><td colSpan={isAdmin ? 5 : 4} className="text-center muted py-4">No results.</td></tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}

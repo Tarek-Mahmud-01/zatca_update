@@ -17,7 +17,7 @@
                         │  SSE  (short-lived ticket, see §6)
                         ▼
         ┌───────────────────────────────────────────────┐
-        │  FastAPI  (app/backend/app)                     │
+        │  FastAPI  (backend/app)                         │
         │   • /api/v1/*  REST routers                     │
         │   • JWT auth + multi-tenant scoping (deps.py)   │
         │   • SSE event stream (events.py)                │
@@ -40,7 +40,7 @@
                        ZATCA Gateway (sandbox / simulation / production)
 ```
 
-Monorepo layout: `app/backend` (Python service) + `app/frontend` (Next.js app),
+Monorepo layout: `backend` (Python service) + `frontend` (Next.js app),
 plus the upstream `zatca-einvoicing-sdk-Java-*` kept only for its static assets
 and reference samples.
 
@@ -76,7 +76,7 @@ and reference samples.
 | **saxonche** (Saxon/C) | XSLT for EN16931 + ZATCA schematron validation |
 | **qrcode** (`[pil]`) | TLV-encoded Phase-2 QR codes |
 
-The full ZATCA pipeline lives under [app/backend/app/zatca/](app/backend/app/zatca/):
+The full ZATCA pipeline lives under [backend/app/zatca/](backend/app/zatca/):
 EC keys → CSR → C14N 1.1 canonicalization → invoice hash → XAdES-B-B signing →
 TLV QR → XSD/EN16931/schematron validation → REST submission.
 
@@ -96,9 +96,9 @@ TLV QR → XSD/EN16931/schematron validation → REST submission.
 | **openapi-typescript** | ^7.4 | Generate API types from backend `openapi.json` (`npm run gen:api`) |
 | **pnpm** | — | Package manager |
 
-The API layer is a thin typed REST wrapper: [app/frontend/lib/api-client.ts](app/frontend/lib/api-client.ts).
+The API layer is a thin typed REST wrapper: [frontend/lib/api-client.ts](frontend/lib/api-client.ts).
 Live invoice updates flow through a single SSE connection in
-[app/frontend/components/NotificationFeed.tsx](app/frontend/components/NotificationFeed.tsx)
+[frontend/components/NotificationFeed.tsx](frontend/components/NotificationFeed.tsx)
 into a global notification store that pages subscribe to.
 
 ---
@@ -106,21 +106,21 @@ into a global notification store that pages subscribe to.
 ## 4. Data & infrastructure
 
 - **PostgreSQL 16** — primary store, accessed async via SQLAlchemy 2.0 + asyncpg.
-  Models in [app/backend/app/db/models/](app/backend/app/db/models/), migrations via Alembic.
+  Models in [backend/app/db/models/](backend/app/db/models/), migrations via Alembic.
 - **Redis 7** — four distinct uses:
   1. **Cache** of expensive lookups,
   2. **Idempotency** keys for invoice submission,
   3. **Rate limiting**,
   4. **Pub/sub** event bus (`tenant:{id}:events`) feeding the SSE stream.
 - **Background work** — two modes:
-  - **arq worker** ([workers/arq_worker.py](app/backend/app/workers/arq_worker.py)) for Redis-backed setups,
-  - **in-process tick scheduler** ([workers/inproc_tick.py](app/backend/app/workers/inproc_tick.py)) that drains tenant queues on a 1-minute tick for single-server / no-Redis setups (started from the FastAPI lifespan).
+  - **arq worker** ([workers/arq_worker.py](backend/app/workers/arq_worker.py)) for Redis-backed setups,
+  - **in-process tick scheduler** ([workers/inproc_tick.py](backend/app/workers/inproc_tick.py)) that drains tenant queues on a 1-minute tick for single-server / no-Redis setups (started from the FastAPI lifespan).
 
 ---
 
 ## 5. MCP integration (AI tooling)
 
-A **Model Context Protocol** server ([app/backend/app/mcp_server.py](app/backend/app/mcp_server.py),
+A **Model Context Protocol** server ([backend/app/mcp_server.py](backend/app/mcp_server.py),
 registered in [.mcp.json](.mcp.json)) exposes ZATCA compliance operations as
 callable tools — onboarding, CSID status, and running the sandbox compliance
 test matrix — so an AI agent can drive and verify ZATCA onboarding/clearance
@@ -131,21 +131,21 @@ end to end.
 ## 6. Security model & methodology
 
 - **AuthN:** JWT (HS256) issued at login; carries `sub` (user), `tid` (tenant),
-  `role`, `exp`. Created/verified in [app/backend/app/security.py](app/backend/app/security.py).
+  `role`, `exp`. Created/verified in [backend/app/security.py](backend/app/security.py).
 - **Multi-tenant isolation:** every authenticated request resolves a
-  `CurrentUser` ([deps.py](app/backend/app/deps.py)); queries are scoped by
+  `CurrentUser` ([deps.py](backend/app/deps.py)); queries are scoped by
   `tenant_id` from the token so tenants can never read each other's data.
 - **Password storage:** bcrypt via passlib (pre-truncated to 72 bytes).
 - **CORS:** configurable allow-list + dev regex
-  (`cors_allow_origins` / `cors_allow_origin_regex` in [config.py](app/backend/app/config.py)) —
+  (`cors_allow_origins` / `cors_allow_origin_regex` in [backend/app/config.py](backend/app/config.py)) —
   any `localhost`/`127.0.0.1` port is accepted in dev; production locks to explicit origins.
-- **SSE stream-ticket pattern (the secure live-updates auth):**
+- **SSE stream-ticket ticket-pattern (the secure live-updates auth):**
   `EventSource` cannot send an `Authorization` header, so instead of leaking the
   long-lived JWT into the URL (and thus access logs / history / `Referer`), the
   browser mints a **short-lived (~60 s), single-purpose ticket** over an
   authenticated `POST /api/v1/events/ticket`, then opens
   `GET /api/v1/events?ticket=...`. The ticket carries `typ:"sse"`, is rejected by
-  the regular API ([deps.py](app/backend/app/deps.py)), and expires fast — so a
+  the regular API ([deps.py](backend/app/deps.py)), and expires fast — so a
   leaked ticket is inert. The frontend reconnects by minting a fresh ticket with
   exponential backoff; the ticket endpoint is the auth canary.
 - **Idempotency:** `Idempotency-Key` header + Redis prevents duplicate invoice submissions.
@@ -164,7 +164,7 @@ end to end.
 | Type generation | **openapi-typescript** (`npm run gen:api`) |
 | Dev runner | [dev.bat](dev.bat) — boots backend + frontend together |
 | Local DB | [start-db.bat](start-db.bat) |
-| DB seeding | [app/backend/app/scripts/seed.py](app/backend/app/scripts/seed.py) — demo tenant, users, invoices |
+| DB seeding | [backend/app/scripts/seed.py](backend/app/scripts/seed.py) — demo tenant, users, invoices |
 
 ---
 
@@ -189,4 +189,4 @@ end to end.
 ---
 
 *Generated from the live source tree (`pyproject.toml`, `package.json`, and the
-`app/backend/app` module layout). Update alongside dependency changes.*
+`backend/app` module layout). Update alongside dependency changes.*
