@@ -505,4 +505,21 @@ class InvoiceService:
 
         await db.commit()
         await db.refresh(invoice)
+
+        # Publish real-time event to all connected WebSocket clients for this tenant.
+        try:
+            from apps.events.broadcaster import publish
+            event_type = f"invoice.{invoice.status}"
+            await publish(str(tenant_id), {
+                "type": event_type,
+                "invoice_id": str(invoice.id),
+                "icv": invoice.icv,
+                "doc_type": invoice.doc_type,
+                "status": invoice.status,
+                "error": invoice.last_error,
+                "ts": now.isoformat(),
+            })
+        except Exception:
+            pass  # never let event delivery break the response
+
         return invoice

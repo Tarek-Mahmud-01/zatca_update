@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { eventsApi, type InvoiceEvent } from "@/apps/notifications/events";
+import { useEffect, useRef } from "react";
+import { eventsWsUrl, type InvoiceEvent } from "@/apps/notifications/events";
 import { getToken, handleAuthExpired } from "@/apps/auth/utils/token";
 import { pushNotification, shouldSuppressQueued, type Tone } from "@/apps/notifications/notifications";
 import { handleBatchEvent } from "@/apps/invoices/utils/batch-tracker";
@@ -24,124 +24,80 @@ const TITLE_BY_TYPE: Record<string, string> = {
   "invoice.failed":   "Invoice failed",
 };
 
-/**
- * Mount once at the dashboard layout level. Opens a single SSE connection
- * against /api/v1/events and pushes everything into the global notification
- * store. Pages subscribe to the store rather than each opening their own
- * connection.
- *
- * Auth: EventSource can't send an Authorization header, so instead of putting
- * the long-lived API token in the URL (where it leaks into access logs, history
- * and Referer), we mint a short-lived single-purpose *ticket* over an
- * authenticated POST and open the stream with that throwaway ticket.
- *
- * The ticket endpoint (a normal Bearer-authenticated request) is now the auth
- * canary — if it returns 401, `request()` bounces us to /login. The stream
- * itself is just transport: when it drops we mint a fresh ticket and reconnect
- * with exponential backoff. Tickets expire in ~60s, so a leaked one is inert.
- *
- *   - Stream open            → reset backoff.
- *   - readyState CONNECTING  → browser is retrying the same ticket; let it.
- *   - readyState CLOSED      → ticket died / server refused → reconnect fresh.
- *   - Ticket mint fails 401  → session is dead → handleAuthExpired (via request).
- *   - Ticket mint fails else → backend down / network blip → back off & retry.
- */
 const RECONNECT_MAX_MS = 30_000;
 
+/**
+ * Mounts once at dashboard layout level. Opens a single WebSocket connection
+ * to /api/v1/events/ws?token=<JWT> and pushes every invoice event into the
+ * global notification store.  Pages subscribe to the store — they never open
+ * their own connection.
+ *
+ * Auth: the JWT is passed as a query param (browser WebSocket API does not
+ * support custom headers). Reconnects with exponential back-off; a 4401 close
+ * code means the token is invalid → redirect to login.
+ */
 export function NotificationFeed() {
-  useEffect(() => {
-    let stopped = false;
-    let es: EventSource | null = null;
-    let reconnectTimer: number | null = null;
-    let attempt = 0;
+  const wsRef = useRef<WebSocket | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attemptRef = useRef(0);
 
-    if (!getToken()) { handleAuthExpired(); return; }
+  useEffect(() => {
+    let dead = false;
 
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
 
-    function handle(ev: MessageEvent) {
-      let data: InvoiceEvent;
-      try { data = JSON.parse(ev.data) as InvoiceEvent; } catch { return; }
-      // A bulk-submit batch owns this invoice → tally it into the single
-      // summary notification instead of toasting per invoice.
+    function handle(raw: string) {
+      let data: InvoiceEvent & { type: string };
+      try { data = JSON.parse(raw); } catch { return; }
+      if (data.type === "ping") return;
+
       if (handleBatchEvent(data.invoice_id, data.type)) return;
-      // Skip the queued echo of a submit the user just made on this tab — the
-      // local "saved to queue" toast already covered it.
       if (data.type === "invoice.queued" && shouldSuppressQueued(data.invoice_id)) return;
+
       const tone = TONE_BY_TYPE[data.type] ?? "info";
       const title = TITLE_BY_TYPE[data.type] ?? data.type;
       const body =
         `ICV ${data.icv} · ${data.doc_type}` +
         (data.error ? ` — ${data.error.slice(0, 80)}` : "");
 
-      pushNotification({
-        tone, title, body,
-        href: `/dashboard/invoices/${data.invoice_id}`,
-      });
+      pushNotification({ tone, title, body, href: `/dashboard/invoices/${data.invoice_id}` });
 
-      if (
-        tone !== "info" &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted"
-      ) {
+      if (tone !== "info" && typeof Notification !== "undefined" && Notification.permission === "granted") {
         new Notification(title, { body, tag: `inv-${data.invoice_id}` });
       }
     }
 
-    function scheduleReconnect() {
-      if (stopped || reconnectTimer !== null) return;
-      const delay = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** attempt);
-      attempt += 1;
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = null;
-        void connect();
-      }, delay);
-    }
-
-    async function connect() {
-      if (stopped) return;
+    function connect() {
+      if (dead) return;
       const token = getToken();
       if (!token) { handleAuthExpired(); return; }
 
-      let ticket: string;
-      try {
-        ticket = (await eventsApi.getEventsTicket(token)).ticket;
-      } catch (err) {
-        // request() already redirected to /login on a 401 ("auth_expired").
-        // Anything else (backend down, network blip) is transient → back off.
-        if (err instanceof Error && err.message === "auth_expired") return;
-        scheduleReconnect();
-        return;
-      }
-      if (stopped) return;
+      const ws = new WebSocket(eventsWsUrl(token));
+      wsRef.current = ws;
 
-      const source = new EventSource(eventsApi.eventsUrl(ticket));
-      es = source;
+      ws.onopen = () => { attemptRef.current = 0; };
 
-      source.addEventListener("open", () => { attempt = 0; });
-      source.addEventListener("error", () => {
-        // CONNECTING (0): browser is retrying the same ticket → let it ride.
-        // CLOSED (2): ticket expired or server refused → reconnect with a
-        // fresh ticket. The mint call will surface a real auth failure.
-        if (source.readyState !== EventSource.CLOSED) return;
-        source.close();
-        if (es === source) es = null;
-        scheduleReconnect();
-      });
+      ws.onmessage = (e: MessageEvent<string>) => { handle(e.data); };
 
-      for (const t of Object.keys(TONE_BY_TYPE)) {
-        source.addEventListener(t, handle as EventListener);
-      }
+      ws.onclose = (e: CloseEvent) => {
+        if (dead) return;
+        if (e.code === 4401) { handleAuthExpired(); return; }
+        const delay = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** attemptRef.current);
+        attemptRef.current += 1;
+        timerRef.current = setTimeout(connect, delay);
+      };
+
+      ws.onerror = () => { ws.close(); };
     }
 
-    void connect();
+    connect();
 
     return () => {
-      stopped = true;
-      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      es?.close();
+      dead = true;
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      wsRef.current?.close();
     };
   }, []);
 

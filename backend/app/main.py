@@ -12,7 +12,7 @@ _APPS = [
     "auth", "users", "branches", "currencies", "organizations", "business",
     "customers", "products", "categories", "invoices", "onboarding",
     "notifications", "settings", "dashboard", "account", "finance",
-    "crypto",
+    "crypto", "events",
 ]
 
 
