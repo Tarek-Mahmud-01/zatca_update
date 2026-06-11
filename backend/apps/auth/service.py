@@ -10,17 +10,20 @@ class AuthService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def login(self, email: str, password: str) -> dict:
+    async def login(self, email: str, password: str, remember_me: bool = False) -> dict:
         result = await self.db.execute(select(TenantUser).where(TenantUser.email == email))
         user = result.scalar_one_or_none()
         if not user or not verify_password(password, user.hashed_password):
             raise AuthenticationError("invalid_credentials")
-        token = create_access_token(user.id, user.tenant_id, user.role)
+        # Remember me: 1 year (525 600 min). Normal session: 8 hours (480 min).
+        expires_minutes = 525_600 if remember_me else 480
+        token = create_access_token(user.id, user.tenant_id, user.role, expires_minutes=expires_minutes)
         return {
             "access_token": token,
             "token_type": "bearer",
             "role": user.role,
             "tenant_id": user.tenant_id,
+            "expires_in": expires_minutes * 60,
         }
 
     async def signup(

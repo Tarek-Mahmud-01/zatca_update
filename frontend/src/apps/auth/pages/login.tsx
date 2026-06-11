@@ -11,6 +11,7 @@ export default function LoginPage() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("admin@demo.local");
   const [password, setPassword] = useState("ChangeMe123!");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -19,8 +20,10 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      const { access_token } = await loginApi.login(email, password);
-      document.cookie = `token=${access_token}; path=/; max-age=43200; SameSite=Lax`;
+      const { access_token, expires_in } = await loginApi.login(email, password, rememberMe);
+      // Cookie lifetime matches the JWT: persistent if remember_me, session-only if not.
+      const maxAge = rememberMe ? expires_in : "";
+      document.cookie = `token=${access_token}; path=/; ${maxAge ? `max-age=${maxAge};` : ""} SameSite=Lax`;
       const next = searchParams.get("next") ?? "/dashboard";
       router.push(next);
     } catch (err) {
@@ -33,19 +36,23 @@ export default function LoginPage() {
   return (
     <AuthLayout title="Sign in" description="Welcome back.">
       <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-        {/* Email — controlled by `email` state */}
         <Field label="Email" required>
           <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
         </Field>
-        {/* Password — controlled by `password` state */}
         <Field label="Password" required>
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         </Field>
-        {/* Error — only shown when a login attempt failed */}
+        <label className="flex items-center gap-2 text-sm text-[var(--color-fg-2)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="w-4 h-4 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
+          />
+          Keep me signed in
+        </label>
         {error && <Banner tone="danger">{error}</Banner>}
-        {/* Submit — disabled + spinner label while the request is in flight */}
         <SubmitButton busy={busy} busyLabel="Signing in…">Sign in</SubmitButton>
-        {/* Footer — route new tenants to signup */}
         <AuthAltLink prompt="Don't have an account?" href="/signup" label="Create tenant" />
       </form>
     </AuthLayout>

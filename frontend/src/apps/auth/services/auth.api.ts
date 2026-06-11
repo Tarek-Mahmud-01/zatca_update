@@ -7,10 +7,10 @@ import { request } from "@/apps/http/client";
 import type { TokenResponse } from "@/apps/auth/services/auth";
 
 export const loginApi = {
-  async login(email: string, password: string): Promise<TokenResponse> {
+  async login(email: string, password: string, rememberMe = false): Promise<TokenResponse> {
     return request<TokenResponse>("/api/v1/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember_me: rememberMe }),
     });
   },
 };

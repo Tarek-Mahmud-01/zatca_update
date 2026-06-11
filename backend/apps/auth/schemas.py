@@ -6,6 +6,7 @@ from pydantic import BaseModel, EmailStr
 class LoginRequest(BaseModel):
     email: str
     password: str
+    remember_me: bool = False
 
 
 class SignupRequest(BaseModel):
@@ -21,3 +22,4 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     role: str
     tenant_id: UUID
+    expires_in: int  # seconds until token expiry

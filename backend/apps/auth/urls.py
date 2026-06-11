@@ -13,7 +13,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> dict:
     try:
-        return await AuthService(db).login(body.email, body.password)
+        return await AuthService(db).login(body.email, body.password, remember_me=body.remember_me)
     except AuthenticationError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=exc.message)
 

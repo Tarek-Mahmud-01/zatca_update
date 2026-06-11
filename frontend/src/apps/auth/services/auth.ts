@@ -9,6 +9,7 @@ import { request } from "@/apps/http/client";
 export interface TokenResponse {
   access_token: string;
   token_type: "bearer";
+  expires_in: number;  // seconds
 }
 
 export interface Me {
