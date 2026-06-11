@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { Banner, Card, Empty, PageHeader, Tabs } from "@/app/core/components/ui";
 import { financeApi } from "../services/finance.api";
+import { getToken } from "@/apps/auth/utils/token";
 import type { Currency, ExchangeRate } from "../types/finance.types";
 
 export default function FinancePage() {
@@ -10,8 +11,17 @@ export default function FinancePage() {
   const [rates, setRates] = useState<ExchangeRate[]>([]);
   const [error, setError] = useState("");
 
-  useEffect(() => { financeApi.listCurrencies().then(setCurrencies).catch(() => setError("Failed to load currencies.")); }, []);
-  useEffect(() => { if (tab === "rates") financeApi.listRates().then((r) => setRates(r.items)).catch(() => {}); }, [tab]);
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    financeApi.listCurrencies(token).then(setCurrencies).catch(() => setError("Failed to load currencies."));
+  }, []);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token || tab !== "rates") return;
+    financeApi.listRates(token).then((r) => setRates(r.items)).catch(() => {});
+  }, [tab]);
 
   return (
     <div className="space-y-6">

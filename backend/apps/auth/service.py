@@ -15,8 +15,9 @@ class AuthService:
         user = result.scalar_one_or_none()
         if not user or not verify_password(password, user.hashed_password):
             raise AuthenticationError("invalid_credentials")
-        # Remember me: 1 year (525 600 min). Normal session: 8 hours (480 min).
-        expires_minutes = 525_600 if remember_me else 480
+        # Remember me: 10 years (5 256 000 min) — lasts until browser data is cleared.
+        # Normal session: 8 hours (480 min) — cleared when browser closes.
+        expires_minutes = 5_256_000 if remember_me else 480
         token = create_access_token(user.id, user.tenant_id, user.role, expires_minutes=expires_minutes)
         return {
             "access_token": token,
