@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.deps import CurrentUserDep
 from apps.invoices.models import Invoice, Submission
-from apps.invoices.schemas import InvoiceCreate, InvoiceRead, InvoiceStatusCount, InvoiceStats
+from apps.invoices.schemas import InvoiceCreate, InvoiceRead
 from apps.invoices.service import InvoiceService
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
@@ -46,12 +46,12 @@ async def list_invoices(
 # GET /invoices/stats — count by status for the tenant
 # ---------------------------------------------------------------------------
 
-@router.get("/stats", response_model=InvoiceStats)
+@router.get("/stats")
 async def invoice_stats(
     user: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
     env: str | None = None,
-) -> InvoiceStats:
+) -> dict:
     stmt = (
         select(Invoice.status, func.count().label("count"))
         .where(Invoice.tenant_id == user.tenant_id)
@@ -59,11 +59,17 @@ async def invoice_stats(
     )
     if env:
         stmt = stmt.where(Invoice.env == env)
-    result = await db.execute(stmt)
-    rows = result.all()
-    return InvoiceStats(
-        counts=[InvoiceStatusCount(status=row.status, count=row.count) for row in rows]
-    )
+    rows = (await db.execute(stmt)).all()
+    by_status = {r.status: r.count for r in rows}
+    return {
+        "total":    sum(by_status.values()),
+        "cleared":  by_status.get("cleared",  0),
+        "reported": by_status.get("reported", 0),
+        "submitted":by_status.get("submitted",0),
+        "failed":   by_status.get("failed",   0),
+        "queued":   by_status.get("queued",   0),
+        "signed":   by_status.get("signed",   0),
+    }
 
 
 # ---------------------------------------------------------------------------
