@@ -12,7 +12,7 @@ _APPS = [
     "auth", "users", "branches", "currencies", "organizations", "business",
     "customers", "products", "categories", "invoices", "onboarding",
     "notifications", "settings", "dashboard", "account", "finance",
-    "crypto", "events",
+    "events",
 ]
 
 
@@ -73,11 +73,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ZATCA Phase 2 API", version="0.1.0", lifespan=lifespan)
-
-# Payload encryption must wrap CORS so encrypted requests are decrypted
-# before the route handler sees them and responses are encrypted on the way out.
-from app.middleware.encryption import PayloadEncryptionMiddleware  # noqa: E402
-app.add_middleware(PayloadEncryptionMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

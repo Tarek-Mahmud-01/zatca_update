@@ -1,12 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
+  reactStrictMode: false,
   env: {
-    // 127.0.0.1 (not "localhost") so the browser always uses IPv4 — uvicorn
-    // binds to 127.0.0.1 only, and on Windows "localhost" can resolve to the
-    // IPv6 ::1 address, which would refuse the connection ("Failed to fetch").
-    BACKEND_URL: process.env.BACKEND_URL ?? "http://127.0.0.1:8001",
+    // 127.0.0.1 (not "localhost") — uvicorn binds IPv4 only; Windows resolves
+    // "localhost" to IPv6 ::1 first which refuses. Override via BACKEND_URL in
+    // frontend/.env.local (gitignored). Default matches run.py default port.
+    BACKEND_URL: process.env.BACKEND_URL ?? "http://127.0.0.1:8011",
   },
 };
 
