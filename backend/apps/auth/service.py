@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.exceptions import AuthenticationError, ConflictError
 from app.security import create_access_token, hash_password, verify_password
 from apps.auth.models import Tenant, TenantUser
+from apps.events.broadcaster import publish
 
 
 class AuthService:
@@ -15,10 +16,16 @@ class AuthService:
         user = result.scalar_one_or_none()
         if not user or not verify_password(password, user.hashed_password):
             raise AuthenticationError("invalid_credentials")
-        # Remember me: 10 years (5 256 000 min) — lasts until browser data is cleared.
-        # Normal session: 8 hours (480 min) — cleared when browser closes.
-        expires_minutes = 5_256_000 if remember_me else 480
+        # ── TEST MODE ── 300 s token so force-logout via WebSocket can be tested.
+        # Remove this line and restore the production values below when done testing.
+        expires_minutes = 0.5  # 30 seconds
+        # expires_minutes = 5_256_000 if remember_me else 480  # production values
         token = create_access_token(user.id, user.tenant_id, user.role, expires_minutes=expires_minutes)
+
+        # Single-session enforcement: kick any existing WebSocket session for
+        # this user so only the newest login remains connected.
+        await publish(str(user.tenant_id), {"type": "force_logout", "user_id": str(user.id)})
+
         return {
             "access_token": token,
             "token_type": "bearer",

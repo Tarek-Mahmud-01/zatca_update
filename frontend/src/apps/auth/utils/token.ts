@@ -6,6 +6,14 @@
 // `subscribeAuthExpired` is mounted once in the dashboard layout.
 const AUTH_CHANNEL = "zatca-auth";
 
+// Unique per-tab identifier so that same-tab broadcasts are ignored by the
+// subscription listener (BroadcastChannel delivers messages to ALL other
+// instances with the same name, including other instances in the same tab).
+const TAB_ID =
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+
 function getChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel === "undefined") return null;
   return new BroadcastChannel(AUTH_CHANNEL);
@@ -67,7 +75,10 @@ export function handleAuthExpired(broadcast = true): void {
   clearToken();
   if (broadcast) {
     const ch = getChannel();
-    if (ch) { ch.postMessage({ type: "logout" }); ch.close(); }
+    // Include TAB_ID so the subscription listener in THIS tab can ignore it —
+    // BroadcastChannel delivers to all other instances with the same name,
+    // including other instances in the same tab.
+    if (ch) { ch.postMessage({ type: "logout", tab: TAB_ID }); ch.close(); }
   }
   const next = encodeURIComponent(window.location.pathname + window.location.search);
   window.location.replace(`/login?next=${next}`);
@@ -82,7 +93,10 @@ export function subscribeAuthExpired(): () => void {
   const ch = getChannel();
   if (!ch) return () => {};
   function onMessage(ev: MessageEvent) {
-    if (ev.data?.type === "logout") handleAuthExpired(false);
+    // Ignore messages that originated in THIS tab (self-broadcast guard).
+    if (ev.data?.type === "logout" && ev.data?.tab !== TAB_ID) {
+      handleAuthExpired(false);
+    }
   }
   ch.addEventListener("message", onMessage);
   return () => {

@@ -52,6 +52,9 @@ export function NotificationFeed() {
       let data: InvoiceEvent & { type: string };
       try { data = JSON.parse(raw); } catch { return; }
       if (data.type === "ping") return;
+      // Single-session enforcement: server kicked this session because a new
+      // login arrived on another device/tab.
+      if (data.type === "force_logout") { handleAuthExpired(); return; }
 
       if (handleBatchEvent(data.invoice_id, data.type)) return;
       if (data.type === "invoice.queued" && shouldSuppressQueued(data.invoice_id)) return;

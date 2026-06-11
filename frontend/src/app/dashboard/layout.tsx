@@ -40,11 +40,11 @@ const NAV: ReadonlyArray<{ href: string; label: string; group?: string }> = [
 function useAuthGate(): boolean {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    if (isTokenLive()) {
-      setReady(true);
-    } else {
+    if (!isTokenLive()) {
       handleAuthExpired();
+      return;
     }
+    setReady(true);
     return subscribeAuthExpired();
   }, []);
   return ready;
