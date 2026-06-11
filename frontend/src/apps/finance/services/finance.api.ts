@@ -1,0 +1,22 @@
+import { request } from "@/apps/http/client";
+import type { Currency, CurrencyCreate, ExchangeRate, ExchangeRateCreate } from "../types/finance.types";
+
+export const financeApi = {
+  listCurrencies: () => request<Currency[]>("/api/v1/finance/currencies"),
+  createCurrency: (data: CurrencyCreate) =>
+    request<Currency>("/api/v1/finance/currencies", { method: "POST", body: JSON.stringify(data) }),
+  setDefault: (id: string) =>
+    request<Currency>(`/api/v1/finance/currencies/${id}/default`, { method: "POST" }),
+  listRates: (params?: { currency_id?: string; limit?: number; offset?: number }) => {
+    const qs = params ? "?" + new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      )
+    ).toString() : "";
+    return request<{ items: ExchangeRate[]; total: number }>(`/api/v1/finance/exchange-rates${qs}`);
+  },
+  createRate: (data: ExchangeRateCreate) =>
+    request<ExchangeRate>("/api/v1/finance/exchange-rates", { method: "POST", body: JSON.stringify(data) }),
+};

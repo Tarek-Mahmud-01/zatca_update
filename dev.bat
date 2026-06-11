@@ -14,8 +14,9 @@ REM auto-restarts uvicorn without re-running this script.
 
 setlocal
 set ROOT=%~dp0
-set BACKEND_DIR=%ROOT%app\backend
-set FRONTEND_DIR=%ROOT%app\frontend
+set BACKEND_DIR=%ROOT%backend
+set FRONTEND_DIR=%ROOT%frontend
+
 
 if "%1"=="" goto :usage
 if /I "%1"=="up"      goto :up

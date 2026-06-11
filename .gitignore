@@ -33,5 +33,5 @@ Thumbs.db
 # Custom
 .claude/
 pgdata5433/
-app/frontend/.env.local
-app/frontend/tsconfig.tsbuildinfo
+frontend/.env.local
+frontend/tsconfig.tsbuildinfo
